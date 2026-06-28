@@ -265,7 +265,20 @@ const API = {
   bootstrap() { return this.req('GET', '/api/bootstrap'); },
   saveState(state) { return this.req('PUT', '/api/state', state); },
   ai(message, system) { return this.req('POST', '/api/ai/chat', { message, system }); },
+  external() { return this.req('GET', '/api/integrations/external'); },
+  integrationStatus() { return this.req('GET', '/api/integrations/status'); },
 };
+
+// Read-only pipeline pulled from connected upstreams (Sales Engine / Operations).
+// Kept OUT of DB.deals so it's never persisted by saveDB — display only.
+let EXT = { byStage: {}, deals: [], count: 0, value: 0, sources: [], configured: false };
+async function loadExternalPipeline() {
+  try {
+    EXT = await API.external();
+    if (CV === 'pipeline') renderView(); // refresh kanban if it's open
+    updateBadges();
+  } catch (e) { /* integration off or unreachable — ignore */ }
+}
 
 // Debounced full-state persistence. The whole app funnels writes through
 // saveDB(); we batch rapid mutations (e.g. the live score timer) into one PUT.
@@ -642,7 +655,8 @@ function deleteTask(id) { dbDeleteTask(id); renderView(); toast('Task deleted','
 function markAllRead() { dbMarkAllRead(); renderView(); toast('All marked read','success'); }
 function dismissNotif(id) { dbDismissNotif(id); renderView(); }
 function setupDrag() {
-  document.querySelectorAll('.deal-card').forEach(card=>{
+  document.querySelectorAll('.deal-card.ext-card').forEach(c=>{ c.draggable=false; });
+  document.querySelectorAll('.deal-card:not(.ext-card)').forEach(card=>{
     card.draggable=true;
     card.ondragstart=e=>{DB.dragId=e.currentTarget.dataset.id;e.currentTarget.classList.add('dragging');};
     card.ondragend=e=>e.currentTarget.classList.remove('dragging');
@@ -931,20 +945,27 @@ function applyStage(id) { const c=DB.contacts.find(x=>x.id===id); const s=docume
 
 // ── PIPELINE ──
 VIEWS.pipeline = function(v) {
-  const total = Object.values(DB.deals).flat().reduce((a,c)=>a+c.value,0);
+  const manual = Object.values(DB.deals).flat();
+  const manualTotal = manual.reduce((a,c)=>a+c.value,0);
+  const extCount = EXT.count||0, extVal = EXT.value||0;
+  const total = manualTotal + extVal;
+  const allCount = manual.length + extCount;
+  const okSrc = (EXT.sources||[]).filter(s=>s.ok).length;
   v.innerHTML = `
 <div class="g4">
-  <div class="mc ct"><div class="ml">Pipeline Total</div><div class="mv">${fmt(total)}</div><div class="md">Weighted: ${fmt(Math.round(total*.57))}</div></div>
-  <div class="mc cb"><div class="ml">Open Deals</div><div class="mv">${Object.values(DB.deals).flat().length}</div><div class="md">↑ +4 this week</div></div>
-  <div class="mc ca"><div class="ml">Avg Deal Size</div><div class="mv">${fmt(Math.round(total/Math.max(1,Object.values(DB.deals).flat().length)))}</div><div class="md">↑ +14% YoY</div></div>
-  <div class="mc cr"><div class="ml">LOIs / Target</div><div class="mv">${PB.LOIs}/5</div><div class="md">All 5 secured</div></div>
+  <div class="mc ct"><div class="ml">Pipeline Total</div><div class="mv">${fmt(total)}</div><div class="md">${extVal>0?`${fmt(manualTotal)} CRM · ${fmt(extVal)} connected`:`Weighted: ${fmt(Math.round(total*.57))}`}</div></div>
+  <div class="mc cb"><div class="ml">Open Deals</div><div class="mv">${allCount}</div><div class="md">${extCount>0?`${manual.length} CRM · ${extCount} connected`:'↑ +4 this week'}</div></div>
+  <div class="mc ca"><div class="ml">Avg Deal Size</div><div class="mv">${fmt(Math.round(total/Math.max(1,allCount)))}</div><div class="md">↑ +14% YoY</div></div>
+  <div class="mc cr"><div class="ml">${EXT.configured?'Connected Sources':'LOIs / Target'}</div><div class="mv">${EXT.configured?`${okSrc}/${(EXT.sources||[]).length||0}`:PB.LOIs+'/5'}</div><div class="md">${EXT.configured?'⚡ Sales Engine / Ops':'All 5 secured'}</div></div>
 </div>
 <div class="panel">
-  <div class="ph"><div class="pt2">Deal Kanban — Drag to move stages</div><span class="badge bdb">${Object.values(DB.deals).flat().length} deals</span><button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="showAddDeal()">+ Deal</button></div>
+  <div class="ph"><div class="pt2">Deal Kanban — Drag to move stages</div><span class="badge bdb">${allCount} deals</span>${extCount>0?`<span class="badge" style="background:rgba(124,92,191,.15);color:#b39ddb;margin-left:6px">⚡ ${extCount} connected</span>`:''}<button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="showAddDeal()">+ Deal</button></div>
   <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:10px 12px;overflow-x:auto">
-    ${Object.entries(DB.deals).map(([stage,cards])=>`
+    ${Object.entries(DB.deals).map(([stage,cards])=>{
+      const ext = (EXT.byStage&&EXT.byStage[stage])||[];
+      return `
     <div>
-      <div style="font-size:7.5px;color:${sCol(stage)};letter-spacing:1px;text-transform:uppercase;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.06)">${stage} <span style="color:var(--text3)">${cards.length}</span></div>
+      <div style="font-size:7.5px;color:${sCol(stage)};letter-spacing:1px;text-transform:uppercase;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.06)">${stage} <span style="color:var(--text3)">${cards.length+ext.length}</span></div>
       <div class="kancol" data-stage="${stage}">
         ${cards.map(card=>`<div class="deal-card" data-id="${card.id}" draggable="true">
           <div style="font-size:9.5px;font-weight:600;color:var(--text);margin-bottom:4px">${card.name}</div>
@@ -955,8 +976,17 @@ VIEWS.pipeline = function(v) {
           <div style="font-size:7.5px;color:var(--text3)">${card.tier}</div>
           ${card.contact!=='—'?`<div style="font-size:7.5px;color:var(--text4);margin-top:2px">${card.contact}</div>`:''}
         </div>`).join('')}
+        ${ext.map(card=>`<div class="deal-card ext-card" title="From ${card.source} · read-only" style="border-left:2px solid #7c5cbf;opacity:.92">
+          <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px"><span style="font-size:8px">⚡</span><div style="font-size:9.5px;font-weight:600;color:var(--text)">${card.name}</div></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+            <span class="badge" style="font-size:7.5px;background:rgba(124,92,191,.15);color:#b39ddb">${fmt(card.value)}</span>
+            ${card.probability!=null?`<span style="font-size:8px;color:var(--text3)">${card.probability}%</span>`:''}
+          </div>
+          <div style="font-size:7.5px;color:#8e7cc3">${card.source}</div>
+          ${card.contact&&card.contact!=='—'?`<div style="font-size:7.5px;color:var(--text4);margin-top:2px">${card.contact}</div>`:''}
+        </div>`).join('')}
       </div>
-    </div>`).join('')}
+    </div>`;}).join('')}
   </div>
 </div>`;
   setupDrag();
@@ -6143,6 +6173,7 @@ window.go = function(name, el) {
   updateBadges();
   go('dashboard', document.querySelector('.ni'));
   if (OFFLINE) toast('Offline demo — start the backend (npm start) for live data', 'warning', 5000);
+  else { loadExternalPipeline(); setInterval(loadExternalPipeline, 60000); }
 })();
 
 // Simulate live score drift every 8s (hardened; no-ops when data isn't ready)
