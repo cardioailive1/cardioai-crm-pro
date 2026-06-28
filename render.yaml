@@ -37,6 +37,22 @@ services:
         sync: false                # powers the AI Assistant proxy; optional
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-6
+      # ─── Ecosystem integration ───
+      # Same value on the Operations hub + Sales platform. Enables the CRM's
+      # /api/integrations/pipeline endpoint and the inbound pull below.
+      - key: INTEGRATION_API_KEY
+        sync: false
+      # Pull read-only deals from the Sales platform into the CRM pipeline:
+      - key: SALES_ENGINE_URL
+        value: https://cardioai-sales-platform.onrender.com
+      # Leave OPERATIONS_URL unset: the Operations hub aggregates downstream, so
+      # pulling it back into the CRM would re-import the CRM's own deals.
+      # - key: OPERATIONS_URL
+      #   value: https://cardioai-operations-3ejs.onrender.com
+      # Set "true" only if you want the Operations hub to pull its WHOLE pipeline
+      # (CRM + sales) from this CRM as a single aggregated source.
+      - key: INTEGRATION_EXPORT_EXTERNAL
+        value: "false"
 
 databases:
   - name: cardio-ai-crm-db
