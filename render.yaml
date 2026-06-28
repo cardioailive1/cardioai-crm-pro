@@ -1,0 +1,47 @@
+# Render Blueprint for Cardio AI CRM Pro
+# Provisions one Node web service + one managed PostgreSQL database.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# On first deploy you'll be prompted for the values marked `sync: false`
+# (Google OAuth credentials and your Anthropic API key).
+
+services:
+  - type: web
+    name: cardio-ai-crm
+    runtime: node
+    plan: starter            # "free" also works to start; "starter" avoids cold starts
+    region: ohio             # match your database region for fast, free internal networking
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cardio-ai-crm-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true        # Render generates a strong random value
+      - key: GOOGLE_CLIENT_ID
+        sync: false                # paste from Google Cloud Console on first deploy
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: ALLOWED_EMAIL_DOMAIN
+        value: cardioailive.com    # comma-separate to allow multiple domains
+      # Optional explicit allow-list of individual emails (overrides domain check):
+      # - key: ALLOWED_EMAILS
+      #   value: advisor@gmail.com,contractor@outlook.com
+      - key: ANTHROPIC_API_KEY
+        sync: false                # powers the AI Assistant proxy; optional
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-4-6
+
+databases:
+  - name: cardio-ai-crm-db
+    databaseName: cardio_ai_crm
+    user: cardio_ai_crm
+    plan: basic-256mb          # "free" works to start; upgrade as data grows
+    region: ohio
+    ipAllowList: []            # only allow internal connections (from the web service)
