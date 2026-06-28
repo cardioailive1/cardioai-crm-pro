@@ -1,0 +1,579 @@
+{
+  "collections": {
+    "contacts": [
+      {
+        "id": "c-001",
+        "ini": "TN",
+        "bg": "#2e7dd4",
+        "fg": "#6cb3f0",
+        "name": "Dr. Tamanna Nahar",
+        "title": "Co-Founder · CMO",
+        "account": "Cardio AI",
+        "spec": "Cardiology",
+        "stage": "Champion",
+        "score": 99,
+        "trend": "up",
+        "touch": "Today",
+        "email": "dr.nahar@cardioailive.com",
+        "phone": "+1 614 967 8728",
+        "value": 0,
+        "notes": "FACC, FASE. 25+ yrs nuclear cardiology. Yale & Cornell fellowships.",
+        "tags": [
+          "Co-Founder",
+          "FACC",
+          "Internal"
+        ]
+      },
+      {
+        "id": "c-002",
+        "ini": "JH",
+        "bg": "#e84040",
+        "fg": "#ff6b6b",
+        "name": "Dr. James Harmon",
+        "title": "Chief of Cardiology",
+        "account": "Brigham Cardiac Center",
+        "spec": "Electrophysiology",
+        "stage": "Closed Won",
+        "score": 94,
+        "trend": "up",
+        "touch": "Today",
+        "email": "j.harmon@brigham.org",
+        "phone": "+1 617 555-0192",
+        "value": 280000,
+        "notes": "LOI signed. EP Lab rollout Phase 1 complete.",
+        "tags": [
+          "LOI Signed",
+          "EP Lab",
+          "Key Account"
+        ]
+      },
+      {
+        "id": "c-003",
+        "ini": "SK",
+        "bg": "#1d9e75",
+        "fg": "#5dcaa5",
+        "name": "Sarah Kim, MD",
+        "title": "Interventional Cardiologist",
+        "account": "Cleveland Heart Institute",
+        "spec": "Interventional",
+        "stage": "Proposal Sent",
+        "score": 81,
+        "trend": "up",
+        "touch": "18 min ago",
+        "email": "s.kim@clevelandheart.org",
+        "phone": "+1 216 555-0284",
+        "value": 340000,
+        "notes": "Competitor demo imminent. Close window ~10 days.",
+        "tags": [
+          "Proposal Sent",
+          "At Risk",
+          "High Value"
+        ]
+      },
+      {
+        "id": "c-004",
+        "ini": "MP",
+        "bg": "#7c5cbf",
+        "fg": "#a98ee0",
+        "name": "Marcus Patel",
+        "title": "VP Strategic Partnerships",
+        "account": "HeartBridge Diagnostics",
+        "spec": "Partnerships",
+        "stage": "Discovery",
+        "score": 68,
+        "trend": "flat",
+        "touch": "1 hr ago",
+        "email": "m.patel@heartbridge.com",
+        "phone": "+1 310 555-0371",
+        "value": 180000,
+        "notes": "IoMT integration potential. Exploring Tier 4.",
+        "tags": [
+          "IoMT",
+          "Partnerships"
+        ]
+      },
+      {
+        "id": "c-005",
+        "ini": "LC",
+        "bg": "#d4860a",
+        "fg": "#fac775",
+        "name": "Linda Chen",
+        "title": "Director, Clinical Affairs",
+        "account": "CardioVance Labs",
+        "spec": "Clinical Research",
+        "stage": "Needs Nurture",
+        "score": 45,
+        "trend": "down",
+        "touch": "3 days ago",
+        "email": "l.chen@cardiovance.com",
+        "phone": "+1 415 555-0449",
+        "value": 175000,
+        "notes": "3 support tickets unresolved. Renewal at risk.",
+        "tags": [
+          "At Risk",
+          "Renewal"
+        ]
+      },
+      {
+        "id": "c-006",
+        "ini": "RA",
+        "bg": "#c0396e",
+        "fg": "#e87aaa",
+        "name": "Dr. Ravi Anand",
+        "title": "Chief Medical Officer",
+        "account": "MedAxis Partners",
+        "spec": "Women's CVD",
+        "stage": "Demo Scheduled",
+        "score": 88,
+        "trend": "up",
+        "touch": "Yesterday",
+        "email": "r.anand@medaxis.com",
+        "phone": "+1 212 555-0518",
+        "value": 210000,
+        "notes": "Strong fit for Women's CVD module. Very engaged.",
+        "tags": [
+          "CMO",
+          "Women's CVD"
+        ]
+      },
+      {
+        "id": "c-007",
+        "ini": "PW",
+        "bg": "#2e7dd4",
+        "fg": "#6cb3f0",
+        "name": "Dr. Priya Walsh",
+        "title": "Director, Cardiac Imaging",
+        "account": "Stanford Cardiovascular",
+        "spec": "Cardiac Imaging",
+        "stage": "Discovery",
+        "score": 72,
+        "trend": "up",
+        "touch": "2 days ago",
+        "email": "p.walsh@stanford.edu",
+        "phone": "+1 650 555-0623",
+        "value": 420000,
+        "notes": "Academic partner potential. PACS/DICOM interest.",
+        "tags": [
+          "Academic",
+          "Large Deal"
+        ]
+      },
+      {
+        "id": "c-008",
+        "ini": "TN2",
+        "bg": "#1d9e75",
+        "fg": "#5dcaa5",
+        "name": "Dr. Thomas Nguyen",
+        "title": "Chief, EP Lab",
+        "account": "Mayo Clinic Cardiac",
+        "spec": "Electrophysiology",
+        "stage": "Closed Won",
+        "score": 96,
+        "trend": "up",
+        "touch": "Today",
+        "email": "t.nguyen@mayo.edu",
+        "phone": "+1 507 555-0744",
+        "value": 380000,
+        "notes": "LOI signed. Expanding to 3 more sites.",
+        "tags": [
+          "LOI Signed",
+          "Expansion"
+        ]
+      },
+      {
+        "id": "c-009",
+        "ini": "AM",
+        "bg": "#d4860a",
+        "fg": "#fac775",
+        "name": "Angela Morris",
+        "title": "VP Clinical Operations",
+        "account": "NorthStar Medical",
+        "spec": "Operations",
+        "stage": "Negotiation",
+        "score": 59,
+        "trend": "flat",
+        "touch": "5 days ago",
+        "email": "a.morris@northstar.com",
+        "phone": "+1 312 555-0819",
+        "value": 95000,
+        "notes": "Price-sensitive. Needs ROI calculator output.",
+        "tags": [
+          "Price Sensitive",
+          "Tier 1"
+        ]
+      },
+      {
+        "id": "c-010",
+        "ini": "RK",
+        "bg": "#7c5cbf",
+        "fg": "#a98ee0",
+        "name": "Dr. Rachel Kim",
+        "title": "Director, Women's Cardiac",
+        "account": "Johns Hopkins Cardiac",
+        "spec": "Women's CVD",
+        "stage": "Discovery",
+        "score": 76,
+        "trend": "up",
+        "touch": "3 days ago",
+        "email": "r.kim@jhmi.edu",
+        "phone": "+1 443 555-0912",
+        "value": 520000,
+        "notes": "Key target for Women's CVD. $500B market play.",
+        "tags": [
+          "Women's CVD",
+          "Strategic"
+        ]
+      }
+    ],
+    "deals": [
+      {
+        "id": "d-001",
+        "name": "HeartBridge Diagnostics",
+        "value": 180000,
+        "contact": "Marcus Patel",
+        "days": 12,
+        "tier": "Tier 4",
+        "stage": "Discovery"
+      },
+      {
+        "id": "d-002",
+        "name": "Stanford Cardiovascular",
+        "value": 420000,
+        "contact": "Dr. Priya Walsh",
+        "days": 8,
+        "tier": "Tier 3",
+        "stage": "Discovery"
+      },
+      {
+        "id": "d-003",
+        "name": "Johns Hopkins Cardiac",
+        "value": 520000,
+        "contact": "Dr. Rachel Kim",
+        "days": 4,
+        "tier": "Complete",
+        "stage": "Discovery"
+      },
+      {
+        "id": "d-004",
+        "name": "Cleveland Heart Inst.",
+        "value": 340000,
+        "contact": "Sarah Kim, MD",
+        "days": 18,
+        "tier": "Tier 3",
+        "stage": "Demo / Eval"
+      },
+      {
+        "id": "d-005",
+        "name": "MedAxis Partners",
+        "value": 210000,
+        "contact": "Dr. Ravi Anand",
+        "days": 7,
+        "tier": "Tier 3",
+        "stage": "Demo / Eval"
+      },
+      {
+        "id": "d-006",
+        "name": "CardioVance Labs",
+        "value": 175000,
+        "contact": "Linda Chen",
+        "days": 31,
+        "tier": "Tier 2",
+        "stage": "Demo / Eval"
+      },
+      {
+        "id": "d-007",
+        "name": "Brigham II Expansion",
+        "value": 560000,
+        "contact": "—",
+        "days": 14,
+        "tier": "Complete",
+        "stage": "Proposal Sent"
+      },
+      {
+        "id": "d-008",
+        "name": "TriStar Heart System",
+        "value": 290000,
+        "contact": "—",
+        "days": 9,
+        "tier": "Tier 3",
+        "stage": "Proposal Sent"
+      },
+      {
+        "id": "d-009",
+        "name": "UCSF Cardiac Center",
+        "value": 480000,
+        "contact": "—",
+        "days": 22,
+        "tier": "Complete",
+        "stage": "Negotiation"
+      },
+      {
+        "id": "d-010",
+        "name": "NorthStar Medical",
+        "value": 95000,
+        "contact": "Angela Morris",
+        "days": 28,
+        "tier": "Tier 1",
+        "stage": "Negotiation"
+      },
+      {
+        "id": "d-011",
+        "name": "Brigham Cardiac",
+        "value": 280000,
+        "contact": "Dr. Harmon",
+        "days": 0,
+        "tier": "Tier 3",
+        "stage": "Closed Won"
+      },
+      {
+        "id": "d-012",
+        "name": "Mayo Clinic",
+        "value": 380000,
+        "contact": "Dr. Nguyen",
+        "days": 0,
+        "tier": "Complete",
+        "stage": "Closed Won"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t-001",
+        "task": "Send ROI output to NorthStar Medical",
+        "contact": "Angela Morris",
+        "due": "Today",
+        "pri": "High",
+        "done": false
+      },
+      {
+        "id": "t-002",
+        "task": "Follow-up: competitor demo threat",
+        "contact": "Sarah Kim, MD",
+        "due": "Today",
+        "pri": "High",
+        "done": false
+      },
+      {
+        "id": "t-003",
+        "task": "Schedule Women's CVD demo — Johns Hopkins",
+        "contact": "Dr. Rachel Kim",
+        "due": "Tomorrow",
+        "pri": "High",
+        "done": false
+      },
+      {
+        "id": "t-004",
+        "task": "Log demo notes — MedAxis",
+        "contact": "Dr. Ravi Anand",
+        "due": "Tomorrow",
+        "pri": "Med",
+        "done": false
+      },
+      {
+        "id": "t-005",
+        "task": "Review CardioVance renewal contract",
+        "contact": "Linda Chen",
+        "due": "Apr 7",
+        "pri": "Med",
+        "done": false
+      },
+      {
+        "id": "t-006",
+        "task": "Prep QBR slides for HeartBridge",
+        "contact": "Marcus Patel",
+        "due": "Apr 10",
+        "pri": "Low",
+        "done": false
+      }
+    ],
+    "notifications": [
+      {
+        "id": "n-001",
+        "type": "danger",
+        "icon": "!",
+        "title": "Competitor Alert",
+        "body": "RhythmAI demo booked with Sarah Kim at Cleveland HI — Tuesday. Close window: 10 days.",
+        "unread": true,
+        "ts": 1782637152338
+      },
+      {
+        "id": "n-002",
+        "type": "warning",
+        "icon": "!",
+        "title": "Renewal Risk",
+        "body": "CardioVance Labs renewal flagged — 3 open tickets 7+ days. Linda Chen not responding.",
+        "unread": true,
+        "ts": 1782633612338
+      },
+      {
+        "id": "n-003",
+        "type": "info",
+        "icon": "i",
+        "title": "LOI Opportunity",
+        "body": "Dr. Rachel Kim (Johns Hopkins) — Women's CVD platform interest. $520K potential.",
+        "unread": true,
+        "ts": 1782626412338
+      },
+      {
+        "id": "n-004",
+        "type": "success",
+        "icon": "✓",
+        "title": "Deal Won",
+        "body": "Dr. Thomas Nguyen — Mayo Clinic LOI #2 signed. $380K confirmed.",
+        "unread": false,
+        "ts": 1782550812338
+      },
+      {
+        "id": "n-005",
+        "type": "info",
+        "icon": "i",
+        "title": "AI Score Update",
+        "body": "Sarah Kim score +9 → 81. Pricing page visited 4× in 48 hrs.",
+        "unread": false,
+        "ts": 1782547212338
+      },
+      {
+        "id": "n-006",
+        "type": "warning",
+        "icon": "i",
+        "title": "Milestone Alert",
+        "body": "Pilot study data deadline in 14 days. DatosX action required.",
+        "unread": false,
+        "ts": 1782464412338
+      }
+    ],
+    "activities": [
+      {
+        "id": "a-001",
+        "type": "deal",
+        "icon": "✓",
+        "desc": "Mayo Clinic LOI #2 signed — $380K · Dr. Nguyen",
+        "col": "#1d9e75",
+        "ts": 1782633612338
+      },
+      {
+        "id": "a-002",
+        "type": "alert",
+        "icon": "!",
+        "desc": "Competitor alert — RhythmAI demo w/ Cleveland HI",
+        "col": "#e84040",
+        "ts": 1782637152338
+      },
+      {
+        "id": "a-003",
+        "type": "score",
+        "icon": "↑",
+        "desc": "AI score +9 — Sarah Kim pricing page ×4",
+        "col": "#2e7dd4",
+        "ts": 1782635412338
+      },
+      {
+        "id": "a-004",
+        "type": "call",
+        "icon": "📞",
+        "desc": "Discovery call completed — Stanford Cardiovascular",
+        "col": "#1d9e75",
+        "ts": 1782550812338
+      },
+      {
+        "id": "a-005",
+        "type": "email",
+        "icon": "✉",
+        "desc": "Proposal sent — Cleveland Heart Institute $340K",
+        "col": "#2e7dd4",
+        "ts": 1782464412338
+      }
+    ],
+    "sequences": [
+      {
+        "id": "seq-1",
+        "name": "Hospital System Onboarding",
+        "contacts": 18,
+        "active": true,
+        "steps": [
+          {
+            "type": "email",
+            "delay": "Day 0",
+            "done": 16
+          },
+          {
+            "type": "call",
+            "delay": "Day 3",
+            "done": 14
+          },
+          {
+            "type": "email",
+            "delay": "Day 7",
+            "done": 12
+          },
+          {
+            "type": "demo",
+            "delay": "Day 10",
+            "done": 9
+          },
+          {
+            "type": "task",
+            "delay": "Day 14",
+            "done": 7
+          }
+        ]
+      },
+      {
+        "id": "seq-2",
+        "name": "Women's CVD Engagement",
+        "contacts": 12,
+        "active": true,
+        "steps": [
+          {
+            "type": "email",
+            "delay": "Day 0",
+            "done": 11
+          },
+          {
+            "type": "email",
+            "delay": "Day 4",
+            "done": 9
+          },
+          {
+            "type": "call",
+            "delay": "Day 8",
+            "done": 7
+          },
+          {
+            "type": "demo",
+            "delay": "Day 12",
+            "done": 5
+          }
+        ]
+      },
+      {
+        "id": "seq-3",
+        "name": "Re-Engagement Nurture",
+        "contacts": 24,
+        "active": true,
+        "steps": [
+          {
+            "type": "email",
+            "delay": "Day 0",
+            "done": 20
+          },
+          {
+            "type": "email",
+            "delay": "Day 5",
+            "done": 15
+          },
+          {
+            "type": "task",
+            "delay": "Day 9",
+            "done": 11
+          },
+          {
+            "type": "email",
+            "delay": "Day 14",
+            "done": 8
+          }
+        ]
+      }
+    ]
+  },
+  "singletons": {}
+}
