@@ -12,6 +12,16 @@ Postgres-backed sessions, and a generic document store seeded on first boot.
 
 ---
 
+## What changed vs. the static file
+
+| Area | Before | Now |
+| --- | --- | --- |
+| Persistence | Browser `localStorage` (per device) | PostgreSQL, shared across the team |
+| Auth | Client-side 4-digit PIN (cosmetic) | Google Workspace SSO, domain-restricted |
+| AI Assistant | Anthropic key in the browser | Server-side proxy (`ANTHROPIC_API_KEY`) |
+| Roles | PIN → role map | Signed-in Google email → role map |
+| Hosting | Open the file | Node web service + managed Postgres on Render |
+
 The entire CRM UI — dashboard, contacts, pipeline (Kanban), tasks,
 notifications, activity feed, sequences, Salesforce view, analytics, and all the
 other tabs — is preserved. Role-based navigation gating still applies, now keyed
@@ -175,6 +185,50 @@ Your deployed services:
 | This CRM | `https://cardio-ai-crm.onrender.com` |
 
 Set the **same** `INTEGRATION_API_KEY` on all three (server env only — never the browser).
+
+### How the data flows
+
+```
+                         ┌──────────────┐
+                    ┌───▶│     CRM      │───┐
+                    │    │ pulls sales, │   │
+                    │    │ exposes own  │   │
+                    │    └──────────────┘   │
+        pulls       │                       │  pulls
+  ┌──────────────┐  │                       ▼
+  │    Sales     │──┘              ┌──────────────────┐
+  │  platform    │────────────────▶│  Operations hub  │
+  │ (deal source)│   pulls         │  aggregates all  │
+  └──────────────┘                 └──────────────────┘
+
+  Arrows = where deal data ends up. In every case the CONSUMER pulls
+  (the source never pushes). Every link is the same call:
+  GET /api/integrations/pipeline  +  header x-api-key,  cached ~60s.
+```
+
+Per link:
+
+- **Sales platform → CRM.** The CRM (`SALES_ENGINE_URL` set) pulls the sales
+  platform on a ~60s cache, maps each record tolerantly, and shows the results
+  as read-only "⚡ connected" cards in its Pipeline kanban — alongside the team's
+  own deals. These are never draggable and never written to the CRM's Postgres.
+- **Sales platform → Operations hub.** The hub pulls the sales platform directly
+  (listed in its `PIPELINE_SOURCES`), independent of the CRM.
+- **CRM → Operations hub.** The CRM exposes its **own** deals (from Postgres) at
+  the same endpoint; the hub lists the CRM as a second source and merges those
+  with the sales deals and anything entered manually in the hub.
+
+**Why nothing double-counts:** the hub pulls each upstream directly, and the CRM
+runs in default mode (`INTEGRATION_EXPORT_EXTERNAL=false`) so it exports only its
+own deals — it does **not** re-export the sales deals it pulled in. A sales deal
+reaches the hub once (from sales); a CRM deal reaches the hub once (from the CRM).
+(The exception is the alternate topology in option B below, where the CRM becomes
+the hub's single aggregated source.)
+
+**Lifecycle of one deal:** a rep logs a lead in the sales platform → within ~60s
+it appears as a read-only card in the CRM **and** on the hub dashboard. A deal
+created by hand in the CRM → appears on the hub within ~60s, but not back in the
+sales platform (the CRM never pushes upstream). Everything converges at the hub.
 
 ### Recommended wiring (no duplicates, no loops)
 
