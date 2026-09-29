@@ -1408,6 +1408,15 @@ VIEWS.ir = function(v) {
   const segments = Object.entries(segMap).map(([k,val])=>({k,n:val.n,val:val.val})).sort((a,b)=>b.val-a.val);
   const dataroom = c.dataroom||[];
   const drUrl = irDataRoomUrl();
+  // ── Investor analytics ──
+  const IR_STAGE_PROB = {Prospect:10,Intro:20,Pitched:35,Diligence:60,Committed:100,Passed:0};
+  const stageValue = IR_STAGES.map(s=>inv.filter(i=>i.stage===s).reduce((a,i)=>a+(i.check||0),0));
+  const weighted = inv.filter(i=>i.stage!=='Passed').reduce((a,i)=>a+(i.check||0)*((IR_STAGE_PROB[i.stage]||0)/100),0);
+  const closedN = inv.filter(i=>i.stage==='Committed').length + inv.filter(i=>i.stage==='Passed').length;
+  const winRate = closedN ? Math.round(inv.filter(i=>i.stage==='Committed').length/closedN*100) : 0;
+  const checksActive = inv.filter(i=>i.stage!=='Passed' && (i.check||0)>0).map(i=>i.check);
+  const avgCheck = checksActive.length ? Math.round(checksActive.reduce((a,b)=>a+b,0)/checksActive.length) : 0;
+  const coverage = target>0 ? Math.round((committed+weighted)/target*100) : 0;
   const metric = (label,val,sub)=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${label}</div><div style="font-size:15px;font-weight:700;color:var(--text);margin-top:2px">${val}</div><div style="font-size:8px;color:var(--teal2);margin-top:1px">${sub||''}</div></div>`;
 
   v.innerHTML = `
@@ -1477,6 +1486,22 @@ VIEWS.ir = function(v) {
     </tbody>
   </table>
   </div>`}
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Investor Analytics</div><span class="badge bdt" style="margin-left:auto">${coverage}% coverage</span></div>
+  ${inv.length? `
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 12px 4px">
+    ${metric('Weighted Pipeline', fmt(Math.round(weighted)), 'Stage-probability adjusted')}
+    ${metric('Win Rate', winRate+'%', inv.filter(i=>i.stage==='Committed').length+' won / '+inv.filter(i=>i.stage==='Passed').length+' passed')}
+    ${metric('Avg Check', fmt(avgCheck), checksActive.length+' active checks')}
+    ${metric('Coverage', coverage+'%', target>0?('vs '+fmt(target)+' target'):'set a target')}
+  </div>
+  <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:12px;padding:6px 12px 14px">
+    <div><div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Pipeline value by stage</div><div style="height:150px"><canvas id="ir-stage-ch"></canvas></div></div>
+    <div><div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Investors by segment</div><div style="height:150px"><canvas id="ir-seg-ch"></canvas></div></div>
+  </div>`
+  : irEmpty('Add investors to unlock analytics — weighted pipeline, win rate, coverage and charts.')}
 </div>
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
@@ -1569,6 +1594,13 @@ VIEWS.ir = function(v) {
     ${(c.updates&&c.updates.length)? c.updates.map((u,idx)=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)"><div style="font-size:8px;color:var(--text3);width:56px;flex-shrink:0">${u.date||'—'}</div><div style="flex:1;font-size:9.5px;color:var(--text)">${u.title}</div>${u.opens?`<span class="badge bdt" style="font-size:7.5px">${u.opens}</span>`:''}<span onclick="irRemoveUpdate(${idx})" style="cursor:pointer;color:var(--text3);margin-left:8px" title="Remove">×</span></div>`).join('') : irEmpty('No updates logged yet. Log one, or use Compose to draft with AI.') }
   </div>
 </div>`;
+  // Investor analytics charts
+  if (inv.length) ar(()=>{
+    const stageCols = IR_STAGES.map(s=>irStageCol(s));
+    makeChart('ir-stage-ch','bar', IR_STAGES, [{data:stageValue, backgroundColor:stageCols, borderRadius:4, maxBarThickness:34}], {plugins:{tooltip:{callbacks:{label:(x)=>' '+fmt(x.raw)}}},scales:{y:{ticks:{callback:(v)=>'$'+(v>=1e6?(v/1e6)+'M':v>=1e3?(v/1e3)+'K':v)}}}});
+    const segTop = segments.slice(0,6);
+    makeChart('ir-seg-ch','doughnut', segTop.map(s=>s.k), [{data:segTop.map(s=>s.n), backgroundColor:['#2e7dd4','#1d9e75','#f5a623','#7c5cbf','#5dcaa5','#e84040'], borderColor:'rgba(8,19,31,.6)', borderWidth:2}], {cutout:'62%',plugins:{legend:{display:true,position:'right',labels:{color:'#8fa8c0',font:{family:'JetBrains Mono',size:8},boxWidth:8,padding:6}}}});
+  });
 };
 
 
