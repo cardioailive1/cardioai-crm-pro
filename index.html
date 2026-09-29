@@ -1293,6 +1293,15 @@ function irCompose(){
 }
 
 function irEmpty(msg, btn){ return `<div style="text-align:center;padding:22px 12px;color:var(--text3);font-size:9.5px">${msg}${btn?`<div style="margin-top:8px">${btn}</div>`:''}</div>`; }
+// Live filter for the investor pipeline table (no re-render — keeps search focus)
+function irFilterRows(q){
+  q=String(q||'').toLowerCase().trim();
+  const rows=document.querySelectorAll('#ir-rows tr');
+  let shown=0;
+  rows.forEach(tr=>{ const hay=tr.getAttribute('data-search')||''; const match=!q||hay.indexOf(q)>-1; tr.style.display=match?'':'none'; if(match) shown++; });
+  const note=document.getElementById('ir-filter-note');
+  if(note) note.textContent = q ? (shown+' match'+(shown===1?'':'es')) : '';
+}
 
 VIEWS.ir = function(v) {
   const c = irCfg();
@@ -1308,6 +1317,22 @@ VIEWS.ir = function(v) {
   const metric = (label,val,sub)=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${label}</div><div style="font-size:15px;font-weight:700;color:var(--text);margin-top:2px">${val}</div><div style="font-size:8px;color:var(--teal2);margin-top:1px">${sub||''}</div></div>`;
 
   v.innerHTML = `
+<div class="ir-topbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:10px">
+    <div style="width:30px;height:30px;border-radius:8px;background:rgba(232,64,64,.12);border:1px solid rgba(232,64,64,.3);display:flex;align-items:center;justify-content:center;font-size:15px">⬢</div>
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text);line-height:1.15">Investor Relations</div>
+      <div style="font-size:8.5px;color:var(--text3)">Fundraise pipeline &amp; investor CRM${c.round?(' · '+c.round+' round'):''}</div>
+    </div>
+  </div>
+  ${target>0?`<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(29,158,117,.08);border:1px solid rgba(29,158,117,.2);border-radius:7px"><span style="font-size:7.5px;color:var(--text3);letter-spacing:.5px">RAISED</span><span style="font-size:11px;font-weight:700;color:var(--teal2)">${fmt(committed)}</span><span style="font-size:8px;color:var(--text3)">/ ${fmt(target)} · ${pct}%</span></div>`:''}
+  <div style="display:flex;align-items:center;gap:7px;margin-left:auto;flex-wrap:wrap">
+    <input id="ir-search" oninput="irFilterRows(this.value)" placeholder="Search investors…" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:6px 10px;font-size:9px;color:var(--text);width:150px;outline:none"/>
+    <button class="btn bg2" style="padding:6px 10px;font-size:9px" onclick="showImportInvestors()">↑ Import CSV</button>
+    <button class="btn bg2" style="padding:6px 10px;font-size:9px" onclick="irCompose()">✦ Compose</button>
+    <button class="btn bp2" style="padding:6px 10px;font-size:9px" onclick="showAddInvestor()">+ Investor</button>
+  </div>
+</div>
 <div class="g4">
   <div class="mc ct"><div class="ml">${c.round||'Round'} Target</div><div class="mv">${target>0?fmt(target):'—'}</div><div class="md">${c.valuation?('Valuation '+c.valuation):'Set your target →'}</div></div>
   <div class="mc cb"><div class="ml">Committed</div><div class="mv">${fmt(committed)}</div><div class="md">${target>0?pct+'% of target':'—'}</div></div>
@@ -1335,15 +1360,15 @@ VIEWS.ir = function(v) {
 </div>
 
 <div class="panel" style="margin-top:12px">
-  <div class="ph"><div class="pt2">Investor Pipeline</div><span class="badge bdb">${inv.length} firm${inv.length===1?'':'s'}</span><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="showImportInvestors()">Import CSV</button><button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="showAddInvestor()">+ Investor</button></div>
+  <div class="ph"><div class="pt2">Investor Pipeline</div><span class="badge bdb" style="margin-left:auto">${inv.length} firm${inv.length===1?'':'s'}</span></div>
   ${inv.length===0 ? irEmpty('No investors yet. Add your first investor to start tracking the raise.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="showAddInvestor()">+ Add Investor</button>`) : `
   <div style="overflow-x:auto">
   <table style="width:100%;border-collapse:collapse;font-size:9.5px">
     <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
       <th style="padding:7px 10px">Firm</th><th style="padding:7px 6px">Type</th><th style="padding:7px 6px">Stage</th><th style="padding:7px 6px">Check</th><th style="padding:7px 6px">Committed</th><th style="padding:7px 6px">Fit</th><th style="padding:7px 6px">Owner</th><th style="padding:7px 6px">Last</th><th style="padding:7px 6px"></th>
     </tr></thead>
-    <tbody>
-    ${inv.map(i=>`<tr style="border-top:1px solid rgba(255,255,255,.05)">
+    <tbody id="ir-rows">
+    ${inv.map(i=>`<tr data-search="${(i.firm+' '+(i.owner||'')+' '+(i.type||'')+' '+(i.status||'')+' '+i.stage).toLowerCase().replace(/"/g,'')}" style="border-top:1px solid rgba(255,255,255,.05)">
       <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.status?' · '+i.status:''}</div></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.type||''}</td>
       <td style="padding:8px 6px"><select onchange="irSetStage('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStageCol(i.stage)};color:${irStageCol(i.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${IR_STAGES.map(s=>`<option ${s===i.stage?'selected':''}>${s}</option>`).join('')}</select></td>
