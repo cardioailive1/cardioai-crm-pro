@@ -183,6 +183,7 @@ select.inp option{background:var(--bg2)}
     <div class="ni" onclick="go('contacts',this)"><span class="nic">♡</span>Contacts</div>
     <div class="ni" onclick="go('pipeline',this)"><span class="nic">⟁</span>Pipeline</div>
     <div class="ni" onclick="go('forecasting',this)"><span class="nic">⊛</span>Forecasting</div>
+    <div class="ni" onclick="go('ir',this)"><span class="nic">⬢</span>Investor Relations<span class="nn">NEW</span></div>
     <div class="ns">Advanced Tools</div>
     <div class="ni" onclick="go('sequencer',this)"><span class="nic">⊳</span>Outreach Sequencer<span class="nn">NEW</span></div>
     <div class="ni" onclick="go('roi',this)"><span class="nic">$</span>ROI Calculator<span class="nn">NEW</span></div>
@@ -293,6 +294,8 @@ function _flushSave() {
     notifications: DB.notifications,
     activities: DB.activities,
     sequences: DB.sequences,
+    investors: DB.investors,
+    settings: DB.settings,
   };
   API.saveState(payload).catch(e => console.warn('save failed:', e.message));
 }
@@ -354,6 +357,7 @@ const SEED = {
     {id:'n-005',type:'info',icon:'i',title:'AI Score Update',body:'Sarah Kim score +9 → 81. Pricing page visited 4× in 48 hrs.',unread:false,ts:Date.now()-90000000},
     {id:'n-006',type:'warning',icon:'i',title:'Milestone Alert',body:'Pilot study data deadline in 14 days. DatosX action required.',unread:false,ts:Date.now()-172800000},
   ],
+  investors:[],
   patients:[
     {id:'CV-00477',age:71,sex:'M',dx:'Heart Failure (EF 30%)',risk:'Critical',pred:'Hospitalization 91%',ecg:'Just now',status:'ALERT',score:91,col:'#e84040'},
     {id:'CV-00192',age:67,sex:'M',dx:'Atrial Fibrillation',risk:'High',pred:'AFib recurrence 82%',ecg:'2 min ago',status:'Monitoring',score:82,col:'#ff6b6b'},
@@ -401,6 +405,8 @@ async function hydrateDB() {
     DB.notifications = data.notifications || [];
     DB.activities = data.activities || [];
     DB.sequences = data.sequences || [];
+    DB.investors = data.investors || [];
+    DB.settings = data.settings || {};
   } catch (e) {
     console.warn('hydrate failed, using local seed:', e.message);
     DB.contacts = JSON.parse(JSON.stringify(SEED.contacts));
@@ -409,6 +415,8 @@ async function hydrateDB() {
     DB.notifications = JSON.parse(JSON.stringify(SEED.notifications));
     DB.activities = JSON.parse(JSON.stringify(SEED.activities));
     DB.sequences = JSON.parse(JSON.stringify(SEED.sequences));
+    DB.investors = JSON.parse(JSON.stringify(SEED.investors||[]));
+    DB.settings = { ir:{ round:"Seed", target:0, valuation:"", arr:0, burn:0, runwayMo:0, lois:0, earlyAdopters:0, uniPartners:0, capTable:[], updates:[] } };
   }
   // Patients are a live/static clinical feed — not persisted via the CRM API.
   DB.patients = JSON.parse(JSON.stringify(SEED.patients));
@@ -426,6 +434,7 @@ function resetDB() {
 // ── Mutable state ────────────────────────────
 const DB = {
   contacts:[], deals:{}, tasks:[], notifications:[], patients:[], activities:[],
+  investors:[], sequences:[], settings:{},
   sq:'', selContact:null, dragId:null, charts:{},
 };
 
@@ -580,7 +589,15 @@ function go(name, el) {
   const v = document.getElementById('view');
   v.className = 'content fadein stagger';
   v.innerHTML = '';
-  (VIEWS[name]||VIEWS.dashboard)(v);
+  try {
+    (VIEWS[name]||VIEWS.dashboard)(v);
+  } catch (err) {
+    console.error('View "'+name+'" failed to render:', err);
+    v.innerHTML = '<div style="padding:26px;max-width:600px">'
+      + '<div style="font-size:13px;font-weight:700;color:var(--text)">This section hit an error while loading.</div>'
+      + '<div style="font-size:9.5px;color:var(--text3);margin-top:8px;font-family:monospace;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;white-space:pre-wrap">'+String((err&&err.message)||err)+'</div>'
+      + '<div style="font-size:9px;color:var(--text3);margin-top:10px">Try a hard refresh (Cmd/Ctrl+Shift+R). If it persists, share this message.</div></div>';
+  }
 }
 function renderView() { go(CV, null); }
 
@@ -1000,6 +1017,379 @@ function saveDeal() {
   DB.deals[stage].push({id:'d'+Date.now(),name,val:parseInt(document.getElementById('nd-v').value)||0,contact:document.getElementById('nd-c').value||'—',days:0,tier:document.getElementById('nd-t').value});
   closeModal(); toast(name+' added to '+stage,'success'); renderView();
 }
+
+// ══════════════════════════════════════════════
+// INVESTOR RELATIONS  (fully dynamic — data entered by the team, persisted)
+// ══════════════════════════════════════════════
+const IR_STAGES = ['Prospect','Intro','Pitched','Diligence','Committed','Passed'];
+function irStageCol(s){return ({Prospect:'#8fa8c0',Intro:'#2e7dd4',Pitched:'#7c5cbf',Diligence:'#f5a623',Committed:'#1d9e75',Passed:'#e84040'})[s]||'#8fa8c0';}
+const IR_DEFAULTS = { round:'Seed', target:0, valuation:'', arr:0, burn:0, runwayMo:0, lois:0, earlyAdopters:0, uniPartners:0, capTable:[], updates:[] };
+const CAP_COLORS = ['#e84040','#2e7dd4','#1d9e75','#f5a623','#7c5cbf','#5dcaa5','#8fa8c0'];
+function irCfg(){ if(!DB.settings) DB.settings={}; if(!DB.settings.ir) DB.settings.ir=JSON.parse(JSON.stringify(IR_DEFAULTS)); const c=DB.settings.ir; for(const k in IR_DEFAULTS) if(c[k]===undefined) c[k]=JSON.parse(JSON.stringify(IR_DEFAULTS[k])); return c; }
+function irSaveSettings(){ saveDB(); }
+function numOnly(v){ return Math.max(0, parseInt(String(v==null?'':v).replace(/[^0-9]/g,''))||0); }
+
+// ── Investor records (persisted via saveDB → PUT /api/state) ──
+function dbAddInvestor(inv){ DB.investors.push(inv); dbSaveAndRefresh(); }
+function dbUpdateInvestor(id,patch){ const i=DB.investors.findIndex(x=>x.id===id); if(i>-1){ Object.assign(DB.investors[i],patch); dbSaveAndRefresh(); return DB.investors[i]; } }
+function dbDeleteInvestor(id){ DB.investors=DB.investors.filter(x=>x.id!==id); dbSaveAndRefresh(); }
+
+function irSetStage(id, stage){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const patch={stage};
+  if(stage==='Committed' && !inv.committed) patch.committed=inv.check||0;
+  if(stage==='Passed') patch.committed=0;
+  dbUpdateInvestor(id,patch); renderView();
+  toast(inv.firm+' → '+stage, stage==='Committed'?'success':stage==='Passed'?'danger':'info');
+}
+function irEditCommit(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const v=prompt('Committed amount for '+inv.firm+' ($):', inv.committed||0);
+  if(v===null) return;
+  dbUpdateInvestor(id,{committed:numOnly(v)}); renderView();
+}
+function irDelete(id){
+  const inv=DB.investors.find(x=>x.id===id);
+  if(inv && confirm('Remove '+inv.firm+' from the investor pipeline?')){ dbDeleteInvestor(id); renderView(); toast('Investor removed','info'); }
+}
+function showAddInvestor(){
+  modal(`<div class="mh"><div class="mt">Add Investor</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div><label class="flabel">Firm *</label><input class="inp" id="ni-f" placeholder="Firm or fund name"/></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Type</label><select class="inp" id="ni-t"><option>VC</option><option>Strategic</option><option>Angel</option><option>Family Office</option><option>Corporate</option><option>Accelerator</option></select></div>
+      <div><label class="flabel">Stage</label><select class="inp" id="ni-s">${IR_STAGES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Partner / Contact</label><input class="inp" id="ni-p" placeholder="Contact name"/></div>
+      <div><label class="flabel">Target check ($)</label><input class="inp" id="ni-c" type="number" placeholder="0"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Owner</label><input class="inp" id="ni-o" placeholder="Deal owner"/></div>
+      <div><label class="flabel">Fit score (0-100)</label><input class="inp" id="ni-fit" type="number" placeholder=""/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Status / notes</label><input class="inp" id="ni-n" placeholder="e.g. warm intro via advisor"/></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="saveInvestor()">Add Investor</button></div>`);
+}
+function saveInvestor(){
+  const firm=document.getElementById('ni-f').value.trim(); if(!firm){ toast('Enter a firm name','danger'); return; }
+  const stage=document.getElementById('ni-s').value;
+  const check=numOnly(document.getElementById('ni-c').value);
+  dbAddInvestor({
+    id:newId('inv'), firm, type:document.getElementById('ni-t').value, partner:document.getElementById('ni-p').value||'—',
+    stage, check, committed: stage==='Committed'?check:0, fit:Math.max(0,Math.min(100,parseInt(document.getElementById('ni-fit').value)||0)),
+    owner:document.getElementById('ni-o').value||'—', last:'Just now', status:document.getElementById('ni-n').value||'', focus:''
+  });
+  closeModal(); toast(firm+' added to investor pipeline','success'); renderView();
+}
+
+// ── Bulk CSV import for investors ──
+function irMoney(raw){
+  if(raw==null||raw==='') return 0;
+  if(typeof raw==='number') return raw;
+  let s=String(raw).trim().replace(/[$,\s]/g,'');
+  const m=s.match(/^(-?[\d.]+)([kKmMbB]?)$/);
+  if(!m) return parseInt(s.replace(/[^0-9]/g,''))||0;
+  const n=parseFloat(m[1]); const mult=({k:1e3,m:1e6,b:1e9})[m[2].toLowerCase()]||1;
+  return Math.round(n*mult);
+}
+function irNormStage(raw){
+  const t=String(raw||'').trim().toLowerCase();
+  const exact=IR_STAGES.find(s=>s.toLowerCase()===t); if(exact) return exact;
+  if(/commit|won|signed|closed/.test(t)) return 'Committed';
+  if(/pass|lost|declin/.test(t)) return 'Passed';
+  if(/dilig|dd|eval|review/.test(t)) return 'Diligence';
+  if(/pitch|present|deck/.test(t)) return 'Pitched';
+  if(/intro|connect|warm/.test(t)) return 'Intro';
+  return 'Prospect';
+}
+// Minimal RFC-4180-ish CSV parser (handles quotes, commas, CRLF)
+function irParseCSV(text){
+  const rows=[]; let row=[], field='', inQ=false;
+  text=String(text).replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){
+      if(ch==='"'){ if(text[i+1]==='"'){field+='"';i++;} else inQ=false; }
+      else field+=ch;
+    } else {
+      if(ch==='"') inQ=true;
+      else if(ch===','){ row.push(field); field=''; }
+      else if(ch==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else field+=ch;
+    }
+  }
+  if(field!==''||row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r=>r.length && r.some(c=>String(c).trim()!==''));
+}
+const IR_COLMAP={
+  firm:['firm','company','fund','name','investor','organization','organisation'],
+  type:['type','category','kind'],
+  partner:['partner','contact','poc','champion','contactname'],
+  stage:['stage','status'],
+  check:['check','target','amount','checksize','targetcheck','investment','allocation'],
+  committed:['committed','commitment','commit'],
+  fit:['fit','score','fitscore','priority'],
+  owner:['owner','rep','lead','assignedto','salesrep'],
+  status:['notes','note','comment','remarks','statusnote','summary'],
+};
+function irMatchCols(headers){
+  const norm=headers.map(h=>String(h).trim().toLowerCase().replace(/[^a-z0-9]/g,''));
+  const idx={};
+  for(const [field,aliases] of Object.entries(IR_COLMAP)){
+    for(let i=0;i<norm.length;i++){ if(aliases.includes(norm[i])){ idx[field]=i; break; } }
+  }
+  return idx;
+}
+function irRowToInvestor(cells, idx){
+  const get=f=> idx[f]!=null ? String(cells[idx[f]]==null?'':cells[idx[f]]).trim() : '';
+  const firm=get('firm'); if(!firm) return null;
+  const stage=idx.stage!=null ? irNormStage(get('stage')) : 'Prospect';
+  const check=irMoney(get('check'));
+  let committed=irMoney(get('committed'));
+  if(!committed && stage==='Committed') committed=check;
+  const fit=Math.max(0,Math.min(100,parseInt(get('fit'))||0));
+  return {
+    id:newId('inv'), firm, type:get('type')||'VC', partner:get('partner')||'—',
+    stage, check, committed, fit, owner:get('owner')||'—', last:'Imported',
+    status:get('status')||'', focus:''
+  };
+}
+let IR_IMPORT_PARSED=null;
+function showImportInvestors(){
+  IR_IMPORT_PARSED=null;
+  modal(`<div class="mh"><div class="mt">Import Investors (CSV)</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px">Upload a .csv or paste rows below. The first row must be column headers. Recognized columns (any order, extras ignored): <b style="color:var(--text2)">firm, type, partner, stage, check, committed, fit, owner, notes</b>. <a href="#" onclick="irDownloadTemplate();return false" style="color:var(--blue2)">Download template</a></div>
+    <input type="file" id="ir-file" accept=".csv,text/csv" onchange="irFilePicked(event)" style="font-size:9px;margin-bottom:8px;color:var(--text2)"/>
+    <textarea class="inp" id="ir-csv" placeholder="firm,type,stage,check,owner&#10;Acme Capital,VC,Pitched,1000000,Sampson" style="width:100%;height:120px;font-family:monospace;font-size:9px;resize:vertical" oninput="irPreview()"></textarea>
+    <div id="ir-preview" style="font-size:9px;color:var(--text3);margin-top:8px"></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" id="ir-imp-btn" onclick="irImport()">Import</button></div>`);
+}
+function irFilePicked(ev){
+  const f=ev.target.files && ev.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ document.getElementById('ir-csv').value=r.result; irPreview(); };
+  r.readAsText(f);
+}
+function irPreview(){
+  const text=document.getElementById('ir-csv').value.trim();
+  const el=document.getElementById('ir-preview');
+  IR_IMPORT_PARSED=null;
+  if(!text){ el.textContent=''; return; }
+  const rows=irParseCSV(text);
+  if(rows.length<2){ el.innerHTML='<span style="color:var(--amber2)">Need a header row plus at least one data row.</span>'; return; }
+  const idx=irMatchCols(rows[0]);
+  if(idx.firm==null){ el.innerHTML='<span style="color:var(--red2)">No “firm” column found. Include a firm/company/fund column.</span>'; return; }
+  const parsed=rows.slice(1).map(r=>irRowToInvestor(r,idx)).filter(Boolean);
+  IR_IMPORT_PARSED=parsed;
+  const cols=Object.keys(idx).join(', ');
+  el.innerHTML=`<span style="color:var(--teal2)">✓ ${parsed.length} investor${parsed.length===1?'':'s'} ready</span> — mapped columns: ${cols}`;
+}
+function irImport(){
+  const text=document.getElementById('ir-csv').value.trim();
+  if(!text){ toast('Paste CSV or choose a file','danger'); return; }
+  if(!IR_IMPORT_PARSED) irPreview();
+  const parsed=IR_IMPORT_PARSED;
+  if(!parsed || !parsed.length){ toast('Nothing to import — check the format','danger'); return; }
+  parsed.forEach(inv=>DB.investors.push(inv));
+  dbSaveAndRefresh();
+  closeModal(); renderView();
+  toast(parsed.length+' investor'+(parsed.length===1?'':'s')+' imported','success');
+}
+function irDownloadTemplate(){
+  const csv='firm,type,partner,stage,check,committed,fit,owner,notes\n'
+    +'Acme Ventures,VC,Jane Partner,Pitched,1000000,0,82,Sampson Kontomah,Warm intro via advisor\n'
+    +'Health Strategic Fund,Strategic,Corp Dev,Diligence,750000,0,76,Tamanna Nahar,Exploring distribution\n';
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download='investor-import-template.csv'; a.click();
+}
+
+// ── Editable round / metrics / cap table / updates (persisted settings) ──
+function irEditRound(){
+  const c=irCfg();
+  modal(`<div class="mh"><div class="mt">Edit Fundraise Round</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div><label class="flabel">Round name</label><input class="inp" id="rd-r" value="${c.round||''}" placeholder="Seed / Series A"/></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Target raise ($)</label><input class="inp" id="rd-t" type="number" value="${c.target||''}" placeholder="0"/></div>
+      <div><label class="flabel">Valuation</label><input class="inp" id="rd-v" value="${c.valuation||''}" placeholder="e.g. $50M–$80M"/></div>
+    </div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irSaveRound()">Save</button></div>`);
+}
+function irSaveRound(){
+  const c=irCfg();
+  c.round=document.getElementById('rd-r').value.trim()||'Round';
+  c.target=numOnly(document.getElementById('rd-t').value);
+  c.valuation=document.getElementById('rd-v').value.trim();
+  irSaveSettings(); closeModal(); renderView(); toast('Round updated','success');
+}
+function irEditMetrics(){
+  const c=irCfg();
+  modal(`<div class="mh"><div class="mt">Edit Company Metrics</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">ARR ($)</label><input class="inp" id="m-arr" type="number" value="${c.arr||''}" placeholder="0"/></div>
+      <div><label class="flabel">Monthly burn ($)</label><input class="inp" id="m-burn" type="number" value="${c.burn||''}" placeholder="0"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div><label class="flabel">Runway (months)</label><input class="inp" id="m-run" type="number" value="${c.runwayMo||''}" placeholder="0"/></div>
+      <div><label class="flabel">Signed LOIs</label><input class="inp" id="m-loi" type="number" value="${c.lois||''}" placeholder="0"/></div>
+      <div><label class="flabel">Early adopters</label><input class="inp" id="m-ea" type="number" value="${c.earlyAdopters||''}" placeholder="0"/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">University / research partners</label><input class="inp" id="m-uni" type="number" value="${c.uniPartners||''}" placeholder="0"/></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irSaveMetrics()">Save</button></div>`);
+}
+function irSaveMetrics(){
+  const c=irCfg();
+  c.arr=numOnly(document.getElementById('m-arr').value);
+  c.burn=numOnly(document.getElementById('m-burn').value);
+  c.runwayMo=numOnly(document.getElementById('m-run').value);
+  c.lois=numOnly(document.getElementById('m-loi').value);
+  c.earlyAdopters=numOnly(document.getElementById('m-ea').value);
+  c.uniPartners=numOnly(document.getElementById('m-uni').value);
+  irSaveSettings(); closeModal(); renderView(); toast('Metrics updated','success');
+}
+function irAddCap(){
+  modal(`<div class="mh"><div class="mt">Add Cap-Table Row</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb"><div style="display:grid;grid-template-columns:2fr 1fr;gap:8px">
+    <div><label class="flabel">Stakeholder</label><input class="inp" id="cap-w" placeholder="e.g. Founders"/></div>
+    <div><label class="flabel">Ownership %</label><input class="inp" id="cap-p" type="number" placeholder="0"/></div>
+  </div></div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irSaveCap()">Add</button></div>`);
+}
+function irSaveCap(){
+  const who=document.getElementById('cap-w').value.trim(); if(!who){ toast('Enter a stakeholder','danger'); return; }
+  const pct=Math.max(0,Math.min(100,parseFloat(document.getElementById('cap-p').value)||0));
+  const c=irCfg(); c.capTable.push({who,pct}); irSaveSettings(); closeModal(); renderView();
+}
+function irRemoveCap(idx){ const c=irCfg(); c.capTable.splice(idx,1); irSaveSettings(); renderView(); }
+function irAddUpdate(){
+  modal(`<div class="mh"><div class="mt">Log Investor Update</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px">
+      <div><label class="flabel">Period</label><input class="inp" id="up-d" placeholder="e.g. Jun 2026"/></div>
+      <div><label class="flabel">Headline</label><input class="inp" id="up-t" placeholder="Key highlights"/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Open rate (optional)</label><input class="inp" id="up-o" placeholder="e.g. 92% open"/></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irSaveUpdate()">Log Update</button></div>`);
+}
+function irSaveUpdate(){
+  const title=document.getElementById('up-t').value.trim(); if(!title){ toast('Enter a headline','danger'); return; }
+  const c=irCfg();
+  c.updates.unshift({date:document.getElementById('up-d').value.trim()||'—', title, opens:document.getElementById('up-o').value.trim()||''});
+  irSaveSettings(); closeModal(); renderView(); toast('Update logged','success');
+}
+function irRemoveUpdate(idx){ const c=irCfg(); c.updates.splice(idx,1); irSaveSettings(); renderView(); }
+function irCompose(){
+  if (typeof go==='function' && VIEWS.ai){ go('ai', document.querySelector('.ni')); setTimeout(()=>{ const i=document.getElementById('ai-input'); if(i){ i.value='Draft a monthly investor update for Cardio AI covering ARR growth, pipeline, fundraising progress, and hiring.'; } },120); }
+  else toast('Open the AI Assistant to draft an update','info');
+}
+
+function irEmpty(msg, btn){ return `<div style="text-align:center;padding:22px 12px;color:var(--text3);font-size:9.5px">${msg}${btn?`<div style="margin-top:8px">${btn}</div>`:''}</div>`; }
+
+VIEWS.ir = function(v) {
+  const c = irCfg();
+  const inv = DB.investors||[];
+  const committed = inv.reduce((a,i)=>a+(i.committed||0),0);
+  const active = inv.filter(i=>i.stage!=='Passed');
+  const pipeline = inv.filter(i=>i.stage!=='Passed' && i.stage!=='Committed').reduce((a,i)=>a+(i.check||0),0);
+  const target = c.target||0;
+  const pct = target>0 ? Math.min(100, Math.round(committed/target*100)) : 0;
+  const pipePct = target>0 ? Math.min(100-pct, Math.round(pipeline/target*100)) : 0;
+  const salesPipeline = Object.values(DB.deals||{}).flat().reduce((a,d)=>a+(d.value||d.val||0),0);
+  const byStage = IR_STAGES.map(s=>({s,n:inv.filter(i=>i.stage===s).length}));
+  const metric = (label,val,sub)=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${label}</div><div style="font-size:15px;font-weight:700;color:var(--text);margin-top:2px">${val}</div><div style="font-size:8px;color:var(--teal2);margin-top:1px">${sub||''}</div></div>`;
+
+  v.innerHTML = `
+<div class="g4">
+  <div class="mc ct"><div class="ml">${c.round||'Round'} Target</div><div class="mv">${target>0?fmt(target):'—'}</div><div class="md">${c.valuation?('Valuation '+c.valuation):'Set your target →'}</div></div>
+  <div class="mc cb"><div class="ml">Committed</div><div class="mv">${fmt(committed)}</div><div class="md">${target>0?pct+'% of target':'—'}</div></div>
+  <div class="mc ca"><div class="ml">In Pipeline</div><div class="mv">${fmt(pipeline)}</div><div class="md">${active.filter(i=>i.stage!=='Committed').length} active convos</div></div>
+  <div class="mc cr"><div class="ml">Investors Engaged</div><div class="mv">${active.length}</div><div class="md">${inv.filter(i=>i.stage==='Committed').length} committed · ${inv.filter(i=>i.stage==='Passed').length} passed</div></div>
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Fundraise Progress${c.round?(' — '+c.round):''}</div><span class="badge bdt" style="margin-left:auto">${fmt(committed)} / ${target>0?fmt(target):'$0'}</span><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="irEditRound()">Edit Round</button></div>
+  <div style="padding:12px 14px">
+    ${target>0?`
+    <div style="height:20px;border-radius:6px;background:rgba(255,255,255,.05);overflow:hidden;display:flex">
+      <div style="width:${pct}%;background:#1d9e75;display:flex;align-items:center;justify-content:center;font-size:8px;color:#04241a;font-weight:700">${pct>7?fmt(committed):''}</div>
+      <div style="width:${pipePct}%;background:repeating-linear-gradient(45deg,rgba(245,166,35,.5),rgba(245,166,35,.5) 6px,rgba(245,166,35,.3) 6px,rgba(245,166,35,.3) 12px)"></div>
+    </div>
+    <div style="display:flex;gap:16px;margin-top:8px;font-size:8.5px;color:var(--text3)">
+      <span><span style="display:inline-block;width:8px;height:8px;background:#1d9e75;border-radius:2px;margin-right:4px"></span>Committed ${fmt(committed)}</span>
+      <span><span style="display:inline-block;width:8px;height:8px;background:rgba(245,166,35,.5);border-radius:2px;margin-right:4px"></span>In pipeline ${fmt(pipeline)}</span>
+      <span style="margin-left:auto">Remaining ${fmt(Math.max(0,target-committed))}</span>
+    </div>`:irEmpty('No round target set yet.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="irEditRound()">Set up your round</button>`)}
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:12px">
+      ${byStage.map(b=>`<div style="text-align:center;background:var(--bg2);border:1px solid var(--border);border-top:2px solid ${irStageCol(b.s)};border-radius:6px;padding:7px 4px"><div style="font-size:16px;font-weight:700;color:var(--text)">${b.n}</div><div style="font-size:7.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">${b.s}</div></div>`).join('')}
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Investor Pipeline</div><span class="badge bdb">${inv.length} firm${inv.length===1?'':'s'}</span><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="showImportInvestors()">Import CSV</button><button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="showAddInvestor()">+ Investor</button></div>
+  ${inv.length===0 ? irEmpty('No investors yet. Add your first investor to start tracking the raise.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="showAddInvestor()">+ Add Investor</button>`) : `
+  <div style="overflow-x:auto">
+  <table style="width:100%;border-collapse:collapse;font-size:9.5px">
+    <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="padding:7px 10px">Firm</th><th style="padding:7px 6px">Type</th><th style="padding:7px 6px">Stage</th><th style="padding:7px 6px">Check</th><th style="padding:7px 6px">Committed</th><th style="padding:7px 6px">Fit</th><th style="padding:7px 6px">Owner</th><th style="padding:7px 6px">Last</th><th style="padding:7px 6px"></th>
+    </tr></thead>
+    <tbody>
+    ${inv.map(i=>`<tr style="border-top:1px solid rgba(255,255,255,.05)">
+      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.status?' · '+i.status:''}</div></td>
+      <td style="padding:8px 6px;color:var(--text2)">${i.type||''}</td>
+      <td style="padding:8px 6px"><select onchange="irSetStage('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStageCol(i.stage)};color:${irStageCol(i.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${IR_STAGES.map(s=>`<option ${s===i.stage?'selected':''}>${s}</option>`).join('')}</select></td>
+      <td style="padding:8px 6px;color:var(--text2)">${i.check?fmt(i.check):'—'}</td>
+      <td style="padding:8px 6px"><span onclick="irEditCommit('${i.id}')" style="cursor:pointer;color:${i.committed?'var(--teal2)':'var(--text3)'};font-weight:${i.committed?'700':'400'}" title="Click to edit">${i.committed?fmt(i.committed):'—'}</span></td>
+      <td style="padding:8px 6px"><div style="display:flex;align-items:center;gap:4px"><div style="width:28px;height:4px;border-radius:2px;background:rgba(255,255,255,.08)"><div style="width:${i.fit||0}%;height:100%;border-radius:2px;background:${(i.fit||0)>=85?'#1d9e75':(i.fit||0)>=70?'#f5a623':'#e84040'}"></div></div><span style="font-size:8px;color:var(--text3)">${i.fit||0}</span></div></td>
+      <td style="padding:8px 6px;color:var(--text2)">${(i.owner||'—').split(' ')[0]}</td>
+      <td style="padding:8px 6px;color:var(--text3);font-size:8px">${i.last||'—'}</td>
+      <td style="padding:8px 6px"><span onclick="irDelete('${i.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
+    </tr>`).join('')}
+    </tbody>
+  </table>
+  </div>`}
+</div>
+
+<div style="display:grid;grid-template-columns:1.3fr 1fr;gap:12px;margin-top:12px">
+  <div class="panel">
+    <div class="ph"><div class="pt2">Company Metrics</div><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irEditMetrics()">Edit</button></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px">
+      ${metric('ARR', c.arr?fmt(c.arr):'—', c.arr?'Annual recurring':'Set ARR')}
+      ${metric('Monthly Burn', c.burn?fmt(c.burn):'—', c.runwayMo?(c.runwayMo+' mo runway'):'')}
+      ${metric('Sales Pipeline', fmt(salesPipeline), (DB.contacts||[]).length+' accounts (live)')}
+      ${metric('Signed LOIs', c.lois||'—', '')}
+      ${metric('Early Adopters', c.earlyAdopters||'—', '')}
+      ${metric('University Partners', c.uniPartners||'—', '')}
+      ${metric('Committed', fmt(committed), 'From pipeline (live)')}
+      ${metric('Runway', c.runwayMo?(c.runwayMo+' mo'):'—', '')}
+    </div>
+  </div>
+  <div class="panel">
+    <div class="ph"><div class="pt2">Cap Table</div><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irAddCap()">+ Row</button></div>
+    <div style="padding:12px">
+      ${(c.capTable&&c.capTable.length)? c.capTable.map((row,idx)=>`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:3px"><span style="color:var(--text2)">${row.who} <span onclick="irRemoveCap(${idx})" style="cursor:pointer;color:var(--text3);margin-left:4px" title="Remove">×</span></span><span style="color:var(--text);font-weight:700">${row.pct}%</span></div><div style="height:7px;border-radius:4px;background:rgba(255,255,255,.06)"><div style="width:${Math.min(100,row.pct)}%;height:100%;border-radius:4px;background:${CAP_COLORS[idx%CAP_COLORS.length]}"></div></div></div>`).join('') : irEmpty('No cap-table rows yet.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="irAddCap()">+ Add Stakeholder</button>`)}
+      ${(c.capTable&&c.capTable.length)?`<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:8px;color:var(--text3)">Total allocated: ${c.capTable.reduce((a,r)=>a+(r.pct||0),0)}% — illustrative, not a legal cap table.</div>`:''}
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Investor Updates</div><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irAddUpdate()">+ Log</button><button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="irCompose()">✦ Compose</button></div>
+  <div style="padding:6px 12px 12px">
+    ${(c.updates&&c.updates.length)? c.updates.map((u,idx)=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)"><div style="font-size:8px;color:var(--text3);width:56px;flex-shrink:0">${u.date||'—'}</div><div style="flex:1;font-size:9.5px;color:var(--text)">${u.title}</div>${u.opens?`<span class="badge bdt" style="font-size:7.5px">${u.opens}</span>`:''}<span onclick="irRemoveUpdate(${idx})" style="cursor:pointer;color:var(--text3);margin-left:8px" title="Remove">×</span></div>`).join('') : irEmpty('No updates logged yet. Log one, or use Compose to draft with AI.') }
+  </div>
+</div>`;
+};
+
 
 // ── FORECASTING ──
 VIEWS.forecasting = function(v) {
@@ -4193,7 +4583,7 @@ const ROLES = {
   finance: {
     label:'Finance', col:'#8fa8c0', badge:'bdb',
     desc:'Financial dashboards, analytics, forecasting, investor metrics, and pipeline overview.',
-    can:['dashboard','analytics','forecasting','pipeline','tasks','notifications','playbook','team-access'],
+    can:['dashboard','analytics','forecasting','pipeline','ir','tasks','notifications','playbook','team-access'],
   },
   ai_engineer: {
     label:'AI Engineer', col:'#2e7dd4', badge:'bdb',

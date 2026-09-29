@@ -573,7 +573,24 @@
           }
         ]
       }
-    ]
+    ],
+    "investors": []
   },
-  "singletons": {}
+  "singletons": {
+    "app_settings": {
+      "ir": {
+        "round": "Seed",
+        "target": 0,
+        "valuation": "",
+        "arr": 0,
+        "burn": 0,
+        "runwayMo": 0,
+        "lois": 0,
+        "earlyAdopters": 0,
+        "uniPartners": 0,
+        "capTable": [],
+        "updates": []
+      }
+    }
+  }
 }

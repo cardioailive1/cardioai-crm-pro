@@ -298,15 +298,21 @@ function stageMapToDeals(stageMap) {
 // Everything the SPA needs at boot, in one round-trip.
 api.get('/bootstrap', async (req, res, next) => {
   try {
-    const [contacts, deals, tasks, notifications, activities, sequences] =
-      await Promise.all(COLLECTIONS.map((c) => store.list(c)));
+    const lists = {};
+    await Promise.all(
+      COLLECTIONS.map(async (c) => {
+        lists[c] = await store.list(c);
+      })
+    );
     res.json({
-      contacts,
-      deals: dealsToStageMap(deals),
-      tasks,
-      notifications,
-      activities,
-      sequences,
+      contacts: lists.contacts || [],
+      deals: dealsToStageMap(lists.deals || []),
+      tasks: lists.tasks || [],
+      notifications: lists.notifications || [],
+      activities: lists.activities || [],
+      sequences: lists.sequences || [],
+      investors: lists.investors || [],
+      settings: (await store.getSingleton('app_settings')) || {},
     });
   } catch (e) {
     next(e);
@@ -326,11 +332,15 @@ api.put('/state', async (req, res, next) => {
         : null,
       activities: Array.isArray(body.activities) ? body.activities : null,
       sequences: Array.isArray(body.sequences) ? body.sequences : null,
+      investors: Array.isArray(body.investors) ? body.investors : null,
     };
     for (const col of COLLECTIONS) {
       if (payload[col] !== null) {
         await store.replaceCollection(col, payload[col]);
       }
+    }
+    if (body.settings && typeof body.settings === 'object') {
+      await store.putSingleton('app_settings', body.settings);
     }
     res.json({ ok: true });
   } catch (e) {
