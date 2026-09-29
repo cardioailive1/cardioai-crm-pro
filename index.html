@@ -53,7 +53,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'JetBra
 .pb:hover{background:rgba(232,64,64,.28)}
 .ndot{position:relative;cursor:pointer;padding:5px;color:var(--text2)}.ndot:hover{color:var(--text)}
 .ndot-dot{position:absolute;top:3px;right:3px;width:6px;height:6px;border-radius:50%;background:var(--red);border:1.5px solid var(--bg)}
-.content{flex:1;overflow-y:auto;padding:15px;gap:12px;display:flex;flex-direction:column}
+.content{flex:1;min-height:0;overflow-y:auto;padding:15px 15px 60px;gap:12px;display:flex;flex-direction:column}
+.content>*{flex-shrink:0}
 .content::-webkit-scrollbar{width:3px}
 .content::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:2px}
 .g4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
@@ -284,6 +285,8 @@ async function loadExternalPipeline() {
 // Debounced full-state persistence. The whole app funnels writes through
 // saveDB(); we batch rapid mutations (e.g. the live score timer) into one PUT.
 let OFFLINE = false; // true when no backend is reachable (offline demo mode)
+// Public runtime config from the server (env-driven). dataRoomUrl comes from DATA_ROOM_URL.
+let APP_CONFIG = { dataRoomUrl: '' };
 let _saveTimer = null, _savePending = false;
 function _flushSave() {
   _savePending = false;
@@ -407,6 +410,7 @@ async function hydrateDB() {
     DB.sequences = data.sequences || [];
     DB.investors = data.investors || [];
     DB.settings = data.settings || {};
+    APP_CONFIG = Object.assign({ dataRoomUrl:'' }, data.config || {});
   } catch (e) {
     console.warn('hydrate failed, using local seed:', e.message);
     DB.contacts = JSON.parse(JSON.stringify(SEED.contacts));
@@ -417,6 +421,9 @@ async function hydrateDB() {
     DB.sequences = JSON.parse(JSON.stringify(SEED.sequences));
     DB.investors = JSON.parse(JSON.stringify(SEED.investors||[]));
     DB.settings = { ir:{ round:"Seed", target:0, valuation:"", arr:0, burn:0, runwayMo:0, lois:0, earlyAdopters:0, uniPartners:0, capTable:[], updates:[] } };
+    // Offline preview only: falls back to a demo URL so the Data Room card is visible.
+    // In production the server's DATA_ROOM_URL env var is the source of truth.
+    APP_CONFIG = { dataRoomUrl:'https://cardioailivepro.com/data_room.html' };
   }
   // Patients are a live/static clinical feed — not persisted via the CRM API.
   DB.patients = JSON.parse(JSON.stringify(SEED.patients));
@@ -1023,7 +1030,15 @@ function saveDeal() {
 // ══════════════════════════════════════════════
 const IR_STAGES = ['Prospect','Intro','Pitched','Diligence','Committed','Passed'];
 function irStageCol(s){return ({Prospect:'#8fa8c0',Intro:'#2e7dd4',Pitched:'#7c5cbf',Diligence:'#f5a623',Committed:'#1d9e75',Passed:'#e84040'})[s]||'#8fa8c0';}
-const IR_DEFAULTS = { round:'Seed', target:0, valuation:'', arr:0, burn:0, runwayMo:0, lois:0, earlyAdopters:0, uniPartners:0, capTable:[], updates:[] };
+const IR_DEFAULTS = { round:'Seed', target:0, valuation:'', arr:0, burn:0, runwayMo:0, lois:0, earlyAdopters:0, uniPartners:0, capTable:[], updates:[], dataroom:[], cadence:'Monthly', nextUpdate:'', dataroomUrl:'' };
+let IR_DR_EMBED = false;
+// Effective data room URL: per-workspace override (settings) wins, else the server env value.
+function irDataRoomUrl(){ const c=irCfg(); return (c.dataroomUrl && c.dataroomUrl.trim()) ? c.dataroomUrl.trim() : (APP_CONFIG.dataRoomUrl||''); }
+const IR_STRENGTHS = ['Strong','Warm','New','Cold'];
+function irStrengthCol(s){return ({Strong:'#1d9e75',Warm:'#f5a623',New:'#2e7dd4',Cold:'#8fa8c0'})[s]||'#8fa8c0';}
+const IR_DOC_CATS = ['Pitch Deck','Financial Model','Cap Table','Legal','Diligence','Product','Team','Metrics','Other'];
+const IR_DOC_STATUS = ['Draft','Shared','Restricted'];
+function irDocStatusCol(s){return ({Draft:'#8fa8c0',Shared:'#1d9e75',Restricted:'#f5a623'})[s]||'#8fa8c0';}
 const CAP_COLORS = ['#e84040','#2e7dd4','#1d9e75','#f5a623','#7c5cbf','#5dcaa5','#8fa8c0'];
 function irCfg(){ if(!DB.settings) DB.settings={}; if(!DB.settings.ir) DB.settings.ir=JSON.parse(JSON.stringify(IR_DEFAULTS)); const c=DB.settings.ir; for(const k in IR_DEFAULTS) if(c[k]===undefined) c[k]=JSON.parse(JSON.stringify(IR_DEFAULTS[k])); return c; }
 function irSaveSettings(){ saveDB(); }
@@ -1068,6 +1083,11 @@ function showAddInvestor(){
       <div><label class="flabel">Owner</label><input class="inp" id="ni-o" placeholder="Deal owner"/></div>
       <div><label class="flabel">Fit score (0-100)</label><input class="inp" id="ni-fit" type="number" placeholder=""/></div>
     </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Relationship</label><select class="inp" id="ni-str">${IR_STRENGTHS.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      <div><label class="flabel">Segment / thesis</label><input class="inp" id="ni-seg" placeholder="e.g. HealthTech VC"/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Warm intro path</label><input class="inp" id="ni-intro" placeholder="e.g. intro via Dr. Nahar / advisor"/></div>
     <div style="margin-top:8px"><label class="flabel">Status / notes</label><input class="inp" id="ni-n" placeholder="e.g. warm intro via advisor"/></div>
   </div>
   <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="saveInvestor()">Add Investor</button></div>`);
@@ -1079,7 +1099,8 @@ function saveInvestor(){
   dbAddInvestor({
     id:newId('inv'), firm, type:document.getElementById('ni-t').value, partner:document.getElementById('ni-p').value||'—',
     stage, check, committed: stage==='Committed'?check:0, fit:Math.max(0,Math.min(100,parseInt(document.getElementById('ni-fit').value)||0)),
-    owner:document.getElementById('ni-o').value||'—', last:'Just now', status:document.getElementById('ni-n').value||'', focus:''
+    owner:document.getElementById('ni-o').value||'—', last:'Just now', status:document.getElementById('ni-n').value||'', focus:'',
+    strength:document.getElementById('ni-str').value||'New', introBy:document.getElementById('ni-intro').value||'', segment:document.getElementById('ni-seg').value||''
   });
   closeModal(); toast(firm+' added to investor pipeline','success'); renderView();
 }
@@ -1133,6 +1154,9 @@ const IR_COLMAP={
   fit:['fit','score','fitscore','priority'],
   owner:['owner','rep','lead','assignedto','salesrep'],
   status:['notes','note','comment','remarks','statusnote','summary'],
+  strength:['relationship','strength','rel','tier'],
+  introBy:['intro','introby','warmintro','source','referral','connection'],
+  segment:['segment','thesis','focus','category2','audience'],
 };
 function irMatchCols(headers){
   const norm=headers.map(h=>String(h).trim().toLowerCase().replace(/[^a-z0-9]/g,''));
@@ -1153,7 +1177,9 @@ function irRowToInvestor(cells, idx){
   return {
     id:newId('inv'), firm, type:get('type')||'VC', partner:get('partner')||'—',
     stage, check, committed, fit, owner:get('owner')||'—', last:'Imported',
-    status:get('status')||'', focus:''
+    status:get('status')||'', focus:'',
+    strength: idx.strength!=null ? (IR_STRENGTHS.find(s=>s.toLowerCase()===get('strength').toLowerCase())||'New') : 'New',
+    introBy:get('introBy')||'', segment:get('segment')||''
   };
 }
 let IR_IMPORT_PARSED=null;
@@ -1287,6 +1313,67 @@ function irSaveUpdate(){
   irSaveSettings(); closeModal(); renderView(); toast('Update logged','success');
 }
 function irRemoveUpdate(idx){ const c=irCfg(); c.updates.splice(idx,1); irSaveSettings(); renderView(); }
+
+// ── Relationship intelligence ──
+function irSetStrength(id, s){ dbUpdateInvestor(id,{strength:s}); renderView(); }
+
+// ── Data room (VDR) — secure document tracking ──
+function showAddDoc(){
+  modal(`<div class="mh"><div class="mt">Add Data-Room Document</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div><label class="flabel">Document name *</label><input class="inp" id="doc-n" placeholder="e.g. Series A Deck v3"/></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Category</label><select class="inp" id="doc-c">${IR_DOC_CATS.map(x=>`<option>${x}</option>`).join('')}</select></div>
+      <div><label class="flabel">Access</label><select class="inp" id="doc-s">${IR_DOC_STATUS.map(x=>`<option>${x}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Link (optional)</label><input class="inp" id="doc-l" placeholder="https:// (Drive, DocSend, etc.)"/></div>
+    <div style="font-size:8px;color:var(--text3);margin-top:8px">Tracks what's shared with investors. This is a document register — files live in your secure store (Drive / DocSend / VDR).</div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="saveDoc()">Add</button></div>`);
+}
+function saveDoc(){
+  const name=document.getElementById('doc-n').value.trim(); if(!name){ toast('Enter a document name','danger'); return; }
+  const c=irCfg();
+  c.dataroom.unshift({id:newId('doc'), name, category:document.getElementById('doc-c').value, status:document.getElementById('doc-s').value, link:document.getElementById('doc-l').value.trim(), updated:'Just now'});
+  irSaveSettings(); closeModal(); renderView(); toast('Document added to data room','success');
+}
+function irRemoveDoc(id){ const c=irCfg(); c.dataroom=c.dataroom.filter(d=>d.id!==id); irSaveSettings(); renderView(); }
+function irToggleEmbed(){ IR_DR_EMBED=!IR_DR_EMBED; renderView(); }
+function irSetDataroomUrl(){
+  const c=irCfg();
+  modal(`<div class="mh"><div class="mt">Live Data Room URL</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div><label class="flabel">Data room URL (override)</label><input class="inp" id="dr-url" value="${c.dataroomUrl||''}" placeholder="${APP_CONFIG.dataRoomUrl||'https://…/data_room.html'}"/></div>
+    <div style="font-size:8px;color:var(--text3);margin-top:8px">Optional per-workspace override. Leave blank to use the server default${APP_CONFIG.dataRoomUrl?` (<span style="color:var(--text2)">${APP_CONFIG.dataRoomUrl}</span>, from the <code>DATA_ROOM_URL</code> env var)`:` set via the <code>DATA_ROOM_URL</code> environment variable`}. Use "Open ↗" to launch it or "Preview" to embed it inline.</div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irSaveDataroomUrl()">Save</button></div>`);
+}
+function irSaveDataroomUrl(){
+  const c=irCfg(); let u=document.getElementById('dr-url').value.trim();
+  if(u && !/^https?:\/\//i.test(u)) u='https://'+u;
+  c.dataroomUrl=u; irSaveSettings(); closeModal(); renderView(); toast(u?'Data room linked':'Data room link cleared','success');
+}
+function irCycleDoc(id){
+  const c=irCfg(); const d=c.dataroom.find(x=>x.id===id); if(!d) return;
+  const i=IR_DOC_STATUS.indexOf(d.status); d.status=IR_DOC_STATUS[(i+1)%IR_DOC_STATUS.length]; d.updated='Just now';
+  irSaveSettings(); renderView();
+}
+
+// ── Reporting cadence (automated investor updates) ──
+function irEditCadence(){
+  const c=irCfg();
+  modal(`<div class="mh"><div class="mt">Update Cadence</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label class="flabel">Frequency</label><select class="inp" id="cad-f"><option ${c.cadence==='Monthly'?'selected':''}>Monthly</option><option ${c.cadence==='Quarterly'?'selected':''}>Quarterly</option><option ${c.cadence==='Ad-hoc'?'selected':''}>Ad-hoc</option></select></div>
+    <div><label class="flabel">Next update due</label><input class="inp" id="cad-n" value="${c.nextUpdate||''}" placeholder="e.g. Jul 2026"/></div>
+  </div></div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irSaveCadence()">Save</button></div>`);
+}
+function irSaveCadence(){
+  const c=irCfg(); c.cadence=document.getElementById('cad-f').value; c.nextUpdate=document.getElementById('cad-n').value.trim();
+  irSaveSettings(); closeModal(); renderView(); toast('Cadence updated','success');
+}
+
 function irCompose(){
   if (typeof go==='function' && VIEWS.ai){ go('ai', document.querySelector('.ni')); setTimeout(()=>{ const i=document.getElementById('ai-input'); if(i){ i.value='Draft a monthly investor update for Cardio AI covering ARR growth, pipeline, fundraising progress, and hiring.'; } },120); }
   else toast('Open the AI Assistant to draft an update','info');
@@ -1314,6 +1401,13 @@ VIEWS.ir = function(v) {
   const pipePct = target>0 ? Math.min(100-pct, Math.round(pipeline/target*100)) : 0;
   const salesPipeline = Object.values(DB.deals||{}).flat().reduce((a,d)=>a+(d.value||d.val||0),0);
   const byStage = IR_STAGES.map(s=>({s,n:inv.filter(i=>i.stage===s).length}));
+  const strengthCounts = IR_STRENGTHS.map(s=>({s,n:inv.filter(i=>(i.strength||'New')===s).length}));
+  const warmCount = inv.filter(i=>i.introBy && String(i.introBy).trim()).length;
+  const warmPct = inv.length ? Math.round(warmCount/inv.length*100) : 0;
+  const segMap = {}; inv.forEach(i=>{ const k=(i.segment&&String(i.segment).trim())||i.type||'Unspecified'; segMap[k]=segMap[k]||{n:0,val:0}; segMap[k].n++; segMap[k].val+=(i.check||0); });
+  const segments = Object.entries(segMap).map(([k,val])=>({k,n:val.n,val:val.val})).sort((a,b)=>b.val-a.val);
+  const dataroom = c.dataroom||[];
+  const drUrl = irDataRoomUrl();
   const metric = (label,val,sub)=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${label}</div><div style="font-size:15px;font-weight:700;color:var(--text);margin-top:2px">${val}</div><div style="font-size:8px;color:var(--teal2);margin-top:1px">${sub||''}</div></div>`;
 
   v.innerHTML = `
@@ -1365,16 +1459,17 @@ VIEWS.ir = function(v) {
   <div style="overflow-x:auto">
   <table style="width:100%;border-collapse:collapse;font-size:9.5px">
     <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
-      <th style="padding:7px 10px">Firm</th><th style="padding:7px 6px">Type</th><th style="padding:7px 6px">Stage</th><th style="padding:7px 6px">Check</th><th style="padding:7px 6px">Committed</th><th style="padding:7px 6px">Fit</th><th style="padding:7px 6px">Owner</th><th style="padding:7px 6px">Last</th><th style="padding:7px 6px"></th>
+      <th style="padding:7px 10px">Firm</th><th style="padding:7px 6px">Type</th><th style="padding:7px 6px">Stage</th><th style="padding:7px 6px">Check</th><th style="padding:7px 6px">Committed</th><th style="padding:7px 6px">Fit</th><th style="padding:7px 6px">Rel.</th><th style="padding:7px 6px">Owner</th><th style="padding:7px 6px">Last</th><th style="padding:7px 6px"></th>
     </tr></thead>
     <tbody id="ir-rows">
     ${inv.map(i=>`<tr data-search="${(i.firm+' '+(i.owner||'')+' '+(i.type||'')+' '+(i.status||'')+' '+i.stage).toLowerCase().replace(/"/g,'')}" style="border-top:1px solid rgba(255,255,255,.05)">
-      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.status?' · '+i.status:''}</div></td>
+      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.status?' · '+i.status:''}${i.introBy?' · ↗ '+i.introBy:''}${i.segment?' · '+i.segment:''}</div></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.type||''}</td>
       <td style="padding:8px 6px"><select onchange="irSetStage('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStageCol(i.stage)};color:${irStageCol(i.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${IR_STAGES.map(s=>`<option ${s===i.stage?'selected':''}>${s}</option>`).join('')}</select></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.check?fmt(i.check):'—'}</td>
       <td style="padding:8px 6px"><span onclick="irEditCommit('${i.id}')" style="cursor:pointer;color:${i.committed?'var(--teal2)':'var(--text3)'};font-weight:${i.committed?'700':'400'}" title="Click to edit">${i.committed?fmt(i.committed):'—'}</span></td>
       <td style="padding:8px 6px"><div style="display:flex;align-items:center;gap:4px"><div style="width:28px;height:4px;border-radius:2px;background:rgba(255,255,255,.08)"><div style="width:${i.fit||0}%;height:100%;border-radius:2px;background:${(i.fit||0)>=85?'#1d9e75':(i.fit||0)>=70?'#f5a623':'#e84040'}"></div></div><span style="font-size:8px;color:var(--text3)">${i.fit||0}</span></div></td>
+      <td style="padding:8px 6px"><select onchange="irSetStrength('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStrengthCol(i.strength||'New')};color:${irStrengthCol(i.strength||'New')};border-radius:5px;padding:2px 4px;font-size:8px;font-weight:600">${IR_STRENGTHS.map(s=>`<option ${s===(i.strength||'New')?'selected':''}>${s}</option>`).join('')}</select></td>
       <td style="padding:8px 6px;color:var(--text2)">${(i.owner||'—').split(' ')[0]}</td>
       <td style="padding:8px 6px;color:var(--text3);font-size:8px">${i.last||'—'}</td>
       <td style="padding:8px 6px"><span onclick="irDelete('${i.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
@@ -1382,6 +1477,31 @@ VIEWS.ir = function(v) {
     </tbody>
   </table>
   </div>`}
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+  <div class="panel">
+    <div class="ph"><div class="pt2">Relationship Intelligence</div><span class="badge bdt" style="margin-left:auto">${warmPct}% warm</span></div>
+    <div style="padding:12px">
+      ${inv.length? `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
+        ${strengthCounts.map(sc=>`<div style="text-align:center;background:var(--bg2);border:1px solid var(--border);border-top:2px solid ${irStrengthCol(sc.s)};border-radius:6px;padding:7px 4px"><div style="font-size:16px;font-weight:700;color:var(--text)">${sc.n}</div><div style="font-size:7.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">${sc.s}</div></div>`).join('')}
+      </div>
+      <div style="font-size:9px;color:var(--text2);line-height:1.7">
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Warm intros mapped</span><span style="font-weight:700">${warmCount} / ${inv.length}</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Avg fit score</span><span style="font-weight:700">${Math.round(inv.reduce((a,i)=>a+(i.fit||0),0)/inv.length)}</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Strong relationships</span><span style="font-weight:700;color:var(--teal2)">${inv.filter(i=>(i.strength)==='Strong').length}</span></div>
+      </div>
+      <div style="margin-top:10px;font-size:8px;color:var(--text3)">Set each investor's relationship strength and warm-intro path in the pipeline table (Rel. column) or when adding them.</div>`
+      : irEmpty('Add investors to map relationship strength and warm-intro paths.')}
+    </div>
+  </div>
+  <div class="panel">
+    <div class="ph"><div class="pt2">Target Segments</div><span class="badge bdb" style="margin-left:auto">${segments.length} segment${segments.length===1?'':'s'}</span></div>
+    <div style="padding:12px">
+      ${segments.length? segments.map((sg,idx)=>{ const mx=Math.max(...segments.map(x=>x.val),1); return `<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:3px"><span style="color:var(--text2)">${sg.k} <span style="color:var(--text3)">· ${sg.n}</span></span><span style="color:var(--text);font-weight:700">${fmt(sg.val)}</span></div><div style="height:7px;border-radius:4px;background:rgba(255,255,255,.06)"><div style="width:${Math.max(4,Math.round(sg.val/mx*100))}%;height:100%;border-radius:4px;background:${CAP_COLORS[idx%CAP_COLORS.length]}"></div></div></div>`; }).join('') : irEmpty('Tag investors with a segment / thesis to see target-audience breakdown.')}
+    </div>
+  </div>
 </div>
 
 <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:12px;margin-top:12px">
@@ -1408,7 +1528,43 @@ VIEWS.ir = function(v) {
 </div>
 
 <div class="panel" style="margin-top:12px">
-  <div class="ph"><div class="pt2">Investor Updates</div><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irAddUpdate()">+ Log</button><button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="irCompose()">✦ Compose</button></div>
+  <div class="ph"><div class="pt2">Data Room</div>${drUrl?`<span class="badge bdt" style="margin-left:6px">● Live</span>`:''}<span class="badge bdb" style="margin-left:6px">${dataroom.length} doc${dataroom.length===1?'':'s'}</span><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irSetDataroomUrl()">⚙ URL</button><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="showAddDoc()">+ Document</button>${drUrl?`<button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="window.open('${drUrl}','_blank','noopener')">🔒 Open Live ↗</button>`:''}</div>
+  ${drUrl?`
+  <div style="padding:12px 12px 0">
+    <div style="display:flex;align-items:center;gap:10px;background:rgba(29,158,117,.06);border:1px solid rgba(29,158,117,.22);border-radius:8px;padding:10px 12px">
+      <div style="font-size:20px;flex-shrink:0">🔒</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700;color:var(--text)">Live Investor Data Room</div>
+        <div style="font-size:8px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${drUrl}</div>
+        <div style="font-size:7.5px;color:var(--text4);margin-top:1px">Confidential — authorized investors only · access-gated</div>
+      </div>
+      <button class="btn bg2" style="padding:5px 10px;font-size:9px;flex-shrink:0" onclick="irToggleEmbed()">${IR_DR_EMBED?'Hide preview':'Preview ▾'}</button>
+      <button class="btn bp2" style="padding:5px 10px;font-size:9px;flex-shrink:0" onclick="window.open('${drUrl}','_blank','noopener')">Open ↗</button>
+    </div>
+    ${IR_DR_EMBED?`<div style="margin-top:10px"><iframe src="${drUrl}" title="Investor Data Room" style="width:100%;height:560px;border:1px solid var(--border);border-radius:8px;background:#fff" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe><div style="font-size:8px;color:var(--text3);margin-top:5px">If the preview stays blank, the data room blocks inline embedding — use <b>Open ↗</b> to view it in a new tab.</div></div>`:''}
+  </div>`:''}
+  ${dataroom.length? `
+  <div style="padding-top:10px;font-size:8px;color:var(--text3);padding-left:12px">Internal register — documents tracked with investors (complements the live room above):</div>
+  <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:9.5px">
+    <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="padding:7px 10px">Document</th><th style="padding:7px 6px">Category</th><th style="padding:7px 6px">Access</th><th style="padding:7px 6px">Updated</th><th style="padding:7px 6px"></th>
+    </tr></thead><tbody>
+    ${dataroom.map(d=>`<tr style="border-top:1px solid rgba(255,255,255,.05)">
+      <td style="padding:8px 10px;font-weight:600;color:var(--text)">${d.link?`<a href="${d.link}" target="_blank" style="color:var(--blue2);text-decoration:none">${d.name} ↗</a>`:d.name}</td>
+      <td style="padding:8px 6px;color:var(--text2)">${d.category||'—'}</td>
+      <td style="padding:8px 6px"><span onclick="irCycleDoc('${d.id}')" title="Click to change access" style="cursor:pointer;font-size:8px;font-weight:700;padding:2px 7px;border-radius:5px;background:${irDocStatusCol(d.status)}22;color:${irDocStatusCol(d.status)};border:1px solid ${irDocStatusCol(d.status)}55">${d.status}</span></td>
+      <td style="padding:8px 6px;color:var(--text3);font-size:8px">${d.updated||'—'}</td>
+      <td style="padding:8px 6px"><span onclick="irRemoveDoc('${d.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
+    </tr>`).join('')}
+    </tbody></table></div>
+  <div style="font-size:8px;color:var(--text3);padding:8px 12px">Secure document register — track what's shared with investors. Click an access badge to cycle Draft → Shared → Restricted. Files live in your store (Drive / DocSend / VDR).</div>`
+  : (drUrl
+      ? `<div style="padding:10px 12px 14px;font-size:8.5px;color:var(--text3)">Your live investor data room is linked above. Optionally use <b>+ Document</b> to also keep an internal register of individual files here.</div>`
+      : irEmpty('No documents yet. Track your deck, model, cap table and diligence docs here.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="showAddDoc()">+ Add Document</button>`))}
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Investor Updates</div><span class="badge bdt" style="margin-left:6px">${c.cadence||'Monthly'}${c.nextUpdate?' · next '+c.nextUpdate:''}</span><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irEditCadence()">Cadence</button><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="irAddUpdate()">+ Log</button><button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="irCompose()">✦ Compose</button></div>
   <div style="padding:6px 12px 12px">
     ${(c.updates&&c.updates.length)? c.updates.map((u,idx)=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)"><div style="font-size:8px;color:var(--text3);width:56px;flex-shrink:0">${u.date||'—'}</div><div style="flex:1;font-size:9.5px;color:var(--text)">${u.title}</div>${u.opens?`<span class="badge bdt" style="font-size:7.5px">${u.opens}</span>`:''}<span onclick="irRemoveUpdate(${idx})" style="cursor:pointer;color:var(--text3);margin-left:8px" title="Remove">×</span></div>`).join('') : irEmpty('No updates logged yet. Log one, or use Compose to draft with AI.') }
   </div>

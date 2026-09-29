@@ -110,6 +110,7 @@ Only accounts on the allowed domain can enter.
 | `ALLOWED_EMAILS` | no | Comma-separated extra allowed emails (overrides domain check) |
 | `ANTHROPIC_API_KEY` | no | Enables the AI Assistant proxy |
 | `ANTHROPIC_MODEL` | no | Model id (default `claude-sonnet-4-6`) |
+| `DATA_ROOM_URL` | no | Live investor data room URL shown in the IR tab's Data Room panel |
 | `BASE_URL` | no | Overrides the auto-detected public URL |
 | `GOOGLE_CALLBACK_URL` | no | Overrides `<BASE_URL>/auth/google/callback` |
 | `PORT` | no | Defaults to 3000 (Render sets this automatically) |

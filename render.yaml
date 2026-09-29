@@ -37,6 +37,9 @@ services:
         sync: false                # powers the AI Assistant proxy; optional
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-6
+      # Investor Relations — live data room link (surfaced to the app)
+      - key: DATA_ROOM_URL
+        value: https://cardioailivepro.com/data_room.html
       # ─── Ecosystem integration ───
       # Same value on the Operations hub + Sales platform. Enables the CRM's
       # /api/integrations/pipeline endpoint and the inbound pull below.

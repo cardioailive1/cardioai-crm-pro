@@ -62,6 +62,9 @@ const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || '')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
+// Public runtime config surfaced to the browser (non-sensitive).
+const DATA_ROOM_URL = process.env.DATA_ROOM_URL || '';
+
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
@@ -313,6 +316,7 @@ api.get('/bootstrap', async (req, res, next) => {
       sequences: lists.sequences || [],
       investors: lists.investors || [],
       settings: (await store.getSingleton('app_settings')) || {},
+      config: { dataRoomUrl: DATA_ROOM_URL },
     });
   } catch (e) {
     next(e);
