@@ -1109,6 +1109,59 @@ function saveInvestor(){
   });
   closeModal(); toast(firm+' added to investor pipeline','success'); renderView();
 }
+// Edit an existing investor — full form, pre-filled
+function irEditInvestor(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const a=(v)=>String(v==null?'':v).replace(/"/g,'&quot;');
+  const sel=(opts,cur)=>opts.map(o=>`<option ${o===cur?'selected':''}>${o}</option>`).join('');
+  modal(`<div class="mh"><div class="mt">Edit Investor</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div><label class="flabel">Firm *</label><input class="inp" id="ei-f" value="${a(inv.firm)}"/></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Type</label><select class="inp" id="ei-t">${sel(['VC','Strategic','Angel','Family Office','Corporate','Accelerator'],inv.type)}</select></div>
+      <div><label class="flabel">Stage</label><select class="inp" id="ei-s">${sel(IR_STAGES,inv.stage)}</select></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Partner / Contact</label><input class="inp" id="ei-p" value="${a(inv.partner)}"/></div>
+      <div><label class="flabel">Target check ($)</label><input class="inp" id="ei-c" type="number" value="${inv.check||''}"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Owner</label><input class="inp" id="ei-o" value="${a(inv.owner)}"/></div>
+      <div><label class="flabel">Fit score (0-100)</label><input class="inp" id="ei-fit" type="number" value="${inv.fit||''}"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Email</label><input class="inp" id="ei-email" type="email" value="${a(inv.email)}"/></div>
+      <div><label class="flabel">Phone</label><input class="inp" id="ei-phone" value="${a(inv.phone)}"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Relationship</label><select class="inp" id="ei-str">${sel(IR_STRENGTHS,inv.strength||'New')}</select></div>
+      <div><label class="flabel">Segment / thesis</label><input class="inp" id="ei-seg" value="${a(inv.segment)}"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Committed ($)</label><input class="inp" id="ei-comm" type="number" value="${inv.committed||''}"/></div>
+      <div><label class="flabel">Last touch</label><input class="inp" id="ei-last" value="${a(inv.last)}"/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Warm intro path</label><input class="inp" id="ei-intro" value="${a(inv.introBy)}"/></div>
+    <div style="margin-top:8px"><label class="flabel">Status / notes</label><input class="inp" id="ei-n" value="${a(inv.status)}"/></div>
+  </div>
+  <div class="mf"><button class="btn bg2" style="color:var(--red2)" onclick="irDelete('${id}');closeModal()">Delete</button><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irUpdateInvestor('${id}')">Save changes</button></div>`);
+}
+function irUpdateInvestor(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const g=(x)=>document.getElementById(x);
+  const firm=g('ei-f').value.trim(); if(!firm){ toast('Enter a firm name','danger'); return; }
+  const stage=g('ei-s').value, check=numOnly(g('ei-c').value);
+  const patch={
+    firm, type:g('ei-t').value, stage, partner:g('ei-p').value||'—', check,
+    owner:g('ei-o').value||'—', fit:Math.max(0,Math.min(100,parseInt(g('ei-fit').value)||0)),
+    email:g('ei-email').value.trim(), phone:g('ei-phone').value.trim(),
+    strength:g('ei-str').value, segment:g('ei-seg').value, introBy:g('ei-intro').value,
+    status:g('ei-n').value, committed:numOnly(g('ei-comm').value), last:g('ei-last').value.trim()||inv.last
+  };
+  if(stage==='Passed') patch.committed=0;
+  if(stage==='Committed' && !patch.committed) patch.committed=check;
+  dbUpdateInvestor(id,patch); closeModal(); renderView(); toast(firm+' updated','success');
+}
 
 // ── Bulk CSV import for investors ──
 function irMoney(raw){
@@ -1570,7 +1623,7 @@ VIEWS.ir = function(v) {
     </tr></thead>
     <tbody id="ir-rows">
     ${inv.map(i=>`<tr data-search="${(i.firm+' '+(i.owner||'')+' '+(i.type||'')+' '+(i.status||'')+' '+i.stage).toLowerCase().replace(/"/g,'')}" style="border-top:1px solid rgba(255,255,255,.05)">
-      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}${i.autoOutreach?' <span title="Auto-outreach on" style="font-size:8px">⚡</span>':''}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.email?' · '+i.email:''}${i.introBy?' · ↗ '+i.introBy:''}${i.segment?' · '+i.segment:''}${(i.comms&&i.comms.length)?` · <span style="color:var(--teal2)">${i.comms.length} touch${i.comms.length===1?'':'es'}</span>`:''}</div></td>
+      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)"><span onclick="irEditInvestor('${i.id}')" style="cursor:pointer" title="Edit investor">${i.firm}</span>${i.autoOutreach?' <span title="Auto-outreach on" style="font-size:8px">⚡</span>':''}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.email?' · '+i.email:''}${i.introBy?' · ↗ '+i.introBy:''}${i.segment?' · '+i.segment:''}${(i.comms&&i.comms.length)?` · <span style="color:var(--teal2)">${i.comms.length} touch${i.comms.length===1?'':'es'}</span>`:''}</div></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.type||''}</td>
       <td style="padding:8px 6px"><select onchange="irSetStage('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStageCol(i.stage)};color:${irStageCol(i.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${IR_STAGES.map(s=>`<option ${s===i.stage?'selected':''}>${s}</option>`).join('')}</select></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.check?fmt(i.check):'—'}</td>
@@ -1579,7 +1632,7 @@ VIEWS.ir = function(v) {
       <td style="padding:8px 6px"><select onchange="irSetStrength('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStrengthCol(i.strength||'New')};color:${irStrengthCol(i.strength||'New')};border-radius:5px;padding:2px 4px;font-size:8px;font-weight:600">${IR_STRENGTHS.map(s=>`<option ${s===(i.strength||'New')?'selected':''}>${s}</option>`).join('')}</select></td>
       <td style="padding:8px 6px;color:var(--text2)">${(i.owner||'—').split(' ')[0]}</td>
       <td style="padding:8px 6px;color:var(--text3);font-size:8px">${i.last||'—'}</td>
-      <td style="padding:8px 6px;white-space:nowrap;text-align:right"><span onclick="irEmailInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Email">✉</span><span onclick="irCallInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Log call">📞</span><span onclick="irToggleAuto('${i.id}')" style="cursor:pointer;margin-right:7px;opacity:${i.autoOutreach?1:.35}" title="${i.autoOutreach?'Auto-outreach ON — click to disable':'Enable auto-outreach'}">⚡</span><span onclick="irDelete('${i.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
+      <td style="padding:8px 6px;white-space:nowrap;text-align:right"><span onclick="irEditInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Edit">✎</span><span onclick="irEmailInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Email">✉</span><span onclick="irCallInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Log call">📞</span><span onclick="irToggleAuto('${i.id}')" style="cursor:pointer;margin-right:7px;opacity:${i.autoOutreach?1:.35}" title="${i.autoOutreach?'Auto-outreach ON — click to disable':'Enable auto-outreach'}">⚡</span><span onclick="irDelete('${i.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
     </tr>`).join('')}
     </tbody>
   </table>
