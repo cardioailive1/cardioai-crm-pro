@@ -1084,6 +1084,10 @@ function showAddInvestor(){
       <div><label class="flabel">Fit score (0-100)</label><input class="inp" id="ni-fit" type="number" placeholder=""/></div>
     </div>
     <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Email</label><input class="inp" id="ni-email" type="email" placeholder="partner@fund.com"/></div>
+      <div><label class="flabel">Phone</label><input class="inp" id="ni-phone" placeholder="+1 …"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div><label class="flabel">Relationship</label><select class="inp" id="ni-str">${IR_STRENGTHS.map(s=>`<option>${s}</option>`).join('')}</select></div>
       <div><label class="flabel">Segment / thesis</label><input class="inp" id="ni-seg" placeholder="e.g. HealthTech VC"/></div>
     </div>
@@ -1100,7 +1104,8 @@ function saveInvestor(){
     id:newId('inv'), firm, type:document.getElementById('ni-t').value, partner:document.getElementById('ni-p').value||'—',
     stage, check, committed: stage==='Committed'?check:0, fit:Math.max(0,Math.min(100,parseInt(document.getElementById('ni-fit').value)||0)),
     owner:document.getElementById('ni-o').value||'—', last:'Just now', status:document.getElementById('ni-n').value||'', focus:'',
-    strength:document.getElementById('ni-str').value||'New', introBy:document.getElementById('ni-intro').value||'', segment:document.getElementById('ni-seg').value||''
+    strength:document.getElementById('ni-str').value||'New', introBy:document.getElementById('ni-intro').value||'', segment:document.getElementById('ni-seg').value||'',
+    email:document.getElementById('ni-email').value.trim()||'', phone:document.getElementById('ni-phone').value.trim()||'', comms:[], autoOutreach:false
   });
   closeModal(); toast(firm+' added to investor pipeline','success'); renderView();
 }
@@ -1153,6 +1158,8 @@ const IR_COLMAP={
   committed:['committed','commitment','commit'],
   fit:['fit','score','fitscore','priority'],
   owner:['owner','rep','lead','assignedto','salesrep'],
+  email:['email','emailaddress','e-mail','contactemail'],
+  phone:['phone','phonenumber','mobile','tel','cell','contactphone'],
   status:['notes','note','comment','remarks','statusnote','summary'],
   strength:['relationship','strength','rel','tier'],
   introBy:['intro','introby','warmintro','source','referral','connection'],
@@ -1178,6 +1185,7 @@ function irRowToInvestor(cells, idx){
     id:newId('inv'), firm, type:get('type')||'VC', partner:get('partner')||'—',
     stage, check, committed, fit, owner:get('owner')||'—', last:'Imported',
     status:get('status')||'', focus:'',
+    email:get('email')||'', phone:get('phone')||'', comms:[], autoOutreach:false,
     strength: idx.strength!=null ? (IR_STRENGTHS.find(s=>s.toLowerCase()===get('strength').toLowerCase())||'New') : 'New',
     introBy:get('introBy')||'', segment:get('segment')||''
   };
@@ -1314,6 +1322,94 @@ function irSaveUpdate(){
 }
 function irRemoveUpdate(idx){ const c=irCfg(); c.updates.splice(idx,1); irSaveSettings(); renderView(); }
 
+// ── Investor communications (manual + automatic emails / calls) ──
+function irLogComm(id, comm){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  if(!inv.comms) inv.comms=[];
+  inv.comms.unshift(Object.assign({id:newId('cm'), ts:Date.now(), date:'Just now'}, comm));
+  inv.last='Just now';
+  dbSaveAndRefresh();
+}
+function irRemoveComm(invId, commId){ const inv=DB.investors.find(x=>x.id===invId); if(!inv||!inv.comms) return; inv.comms=inv.comms.filter(c=>c.id!==commId); dbSaveAndRefresh(); renderView(); }
+
+// Manual email — compose (with AI draft), open in mail app, and/or log as sent
+function irEmailInvestor(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  modal(`<div class="mh"><div class="mt">Email ${inv.firm}</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px">To: ${inv.email?`<span style="color:var(--text2)">${inv.partner&&inv.partner!=='—'?inv.partner+' · ':''}${inv.email}</span>`:'<span style="color:var(--red2)">no email on file — add one on the investor</span>'}</div>
+    <div><label class="flabel">Subject</label><input class="inp" id="em-subj" placeholder="Cardio AI — following up"/></div>
+    <div style="margin-top:8px"><label class="flabel">Message</label><textarea class="inp" id="em-body" style="width:100%;height:150px;resize:vertical" placeholder="Write your email, or use AI Draft…"></textarea></div>
+    <button class="btn bg2" id="em-draft" style="margin-top:8px;padding:6px 11px;font-size:9px" onclick="irEmailDraft('${id}')">✦ AI Draft</button>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button>${inv.email?`<button class="btn bg2" onclick="irEmailOpen('${id}')">Open in Mail ↗</button>`:''}<button class="btn bp2" onclick="irEmailLog('${id}')">Log as sent</button></div>`);
+}
+async function irEmailDraft(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const body=document.getElementById('em-body'), subj=document.getElementById('em-subj'), btn=document.getElementById('em-draft');
+  if(btn){ btn.textContent='Drafting…'; btn.disabled=true; }
+  try{
+    const sys='You are Cardio AI\'s investor relations assistant. Write concise, warm, professional fundraising emails. Return only the email body, no preamble.';
+    const msg=`Draft a short outreach email to ${inv.partner&&inv.partner!=='—'?inv.partner:'the team'} at ${inv.firm} (${inv.type||'investor'}, pipeline stage: ${inv.stage}${inv.segment?', focus: '+inv.segment:''}). ${inv.introBy?'Warm intro via '+inv.introBy+'. ':''}Goal: advance toward ${inv.stage==='Committed'?'closing documents':inv.stage==='Diligence'?'completing diligence':'a meeting'}. Under 150 words, sign as the Cardio AI team.`;
+    const d=await API.ai(msg, sys);
+    if(body) body.value=(d.reply||'').trim();
+    if(subj && !subj.value) subj.value='Cardio AI — '+(inv.stage==='Committed'?'closing next steps':'following up');
+  }catch(e){ toast('AI draft unavailable — set ANTHROPIC_API_KEY on the server','danger'); }
+  if(btn){ btn.textContent='✦ AI Draft'; btn.disabled=false; }
+}
+function irEmailOpen(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv||!inv.email) { toast('No email on file','danger'); return; }
+  const s=encodeURIComponent(document.getElementById('em-subj').value||''), b=encodeURIComponent(document.getElementById('em-body').value||'');
+  window.location.href='mailto:'+inv.email+'?subject='+s+'&body='+b;
+}
+function irEmailLog(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const subj=(document.getElementById('em-subj').value||'').trim()||'(no subject)';
+  irLogComm(id,{type:'email',mode:'manual',subject:subj,note:(document.getElementById('em-body').value||'').trim().slice(0,160)});
+  closeModal(); renderView(); toast('Email logged for '+inv.firm,'success');
+}
+
+// Manual call — log outcome + notes
+function irCallInvestor(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  modal(`<div class="mh"><div class="mt">Log Call — ${inv.firm}</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px">${inv.phone?`☎ <span style="color:var(--text2)">${inv.phone}</span>`:'No phone on file'}</div>
+    <div><label class="flabel">Outcome</label><select class="inp" id="cl-out"><option>Connected</option><option>Left voicemail</option><option>No answer</option><option>Meeting booked</option><option>Follow-up scheduled</option></select></div>
+    <div style="margin-top:8px"><label class="flabel">Notes</label><textarea class="inp" id="cl-note" style="width:100%;height:90px;resize:vertical" placeholder="What was discussed, next steps…"></textarea></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="irLogCall('${id}')">Log call</button></div>`);
+}
+function irLogCall(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  irLogComm(id,{type:'call',mode:'manual',outcome:document.getElementById('cl-out').value,note:(document.getElementById('cl-note').value||'').trim()});
+  closeModal(); renderView(); toast('Call logged for '+inv.firm,'success');
+}
+
+// Automatic outreach — mark investors, then auto-draft + log emails for them
+function irToggleAuto(id){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  const on=!inv.autoOutreach; dbUpdateInvestor(id,{autoOutreach:on}); renderView();
+  toast(inv.firm+(on?' enabled for auto-outreach ⚡':' removed from auto-outreach'), on?'success':'info');
+}
+async function irAutoEmail(id, silent){
+  const inv=DB.investors.find(x=>x.id===id); if(!inv) return;
+  let bodyText='Automated follow-up from the Cardio AI team.';
+  try{
+    const d=await API.ai(`Write a brief automated follow-up email to ${inv.partner&&inv.partner!=='—'?inv.partner:'the team'} at ${inv.firm} (stage ${inv.stage}). Under 120 words. Return only the body.`, 'You are Cardio AI\'s investor relations autopilot. Warm, concise, professional.');
+    bodyText=(d.reply||bodyText).trim();
+  }catch(e){ /* fall back to template */ }
+  irLogComm(id,{type:'email',mode:'auto',subject:'Automated follow-up',note:bodyText.slice(0,160)});
+  if(!silent){ renderView(); toast('Automatic email drafted & logged for '+inv.firm,'success'); }
+}
+async function irRunAutoOutreach(){
+  const targets=DB.investors.filter(i=>i.autoOutreach && i.stage!=='Passed');
+  if(!targets.length){ toast('No investors marked for auto-outreach. Toggle ⚡ on a row first.','info'); return; }
+  toast('Running auto-outreach for '+targets.length+' investor'+(targets.length===1?'':'s')+'…','info');
+  for(const inv of targets){ await irAutoEmail(inv.id, true); }
+  renderView(); toast('Auto-outreach complete — '+targets.length+' email'+(targets.length===1?'':'s')+' logged','success');
+}
+
 // ── Relationship intelligence ──
 function irSetStrength(id, s){ dbUpdateInvestor(id,{strength:s}); renderView(); }
 
@@ -1417,6 +1513,8 @@ VIEWS.ir = function(v) {
   const checksActive = inv.filter(i=>i.stage!=='Passed' && (i.check||0)>0).map(i=>i.check);
   const avgCheck = checksActive.length ? Math.round(checksActive.reduce((a,b)=>a+b,0)/checksActive.length) : 0;
   const coverage = target>0 ? Math.round((committed+weighted)/target*100) : 0;
+  const allComms = inv.flatMap(i=>(i.comms||[]).map(cm=>Object.assign({firm:i.firm,invId:i.id},cm))).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const autoCount = inv.filter(i=>i.autoOutreach && i.stage!=='Passed').length;
   const metric = (label,val,sub)=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${label}</div><div style="font-size:15px;font-weight:700;color:var(--text);margin-top:2px">${val}</div><div style="font-size:8px;color:var(--teal2);margin-top:1px">${sub||''}</div></div>`;
 
   v.innerHTML = `
@@ -1472,7 +1570,7 @@ VIEWS.ir = function(v) {
     </tr></thead>
     <tbody id="ir-rows">
     ${inv.map(i=>`<tr data-search="${(i.firm+' '+(i.owner||'')+' '+(i.type||'')+' '+(i.status||'')+' '+i.stage).toLowerCase().replace(/"/g,'')}" style="border-top:1px solid rgba(255,255,255,.05)">
-      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.status?' · '+i.status:''}${i.introBy?' · ↗ '+i.introBy:''}${i.segment?' · '+i.segment:''}</div></td>
+      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)">${i.firm}${i.autoOutreach?' <span title="Auto-outreach on" style="font-size:8px">⚡</span>':''}</div><div style="font-size:8px;color:var(--text3)">${i.partner||'—'}${i.email?' · '+i.email:''}${i.introBy?' · ↗ '+i.introBy:''}${i.segment?' · '+i.segment:''}${(i.comms&&i.comms.length)?` · <span style="color:var(--teal2)">${i.comms.length} touch${i.comms.length===1?'':'es'}</span>`:''}</div></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.type||''}</td>
       <td style="padding:8px 6px"><select onchange="irSetStage('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStageCol(i.stage)};color:${irStageCol(i.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${IR_STAGES.map(s=>`<option ${s===i.stage?'selected':''}>${s}</option>`).join('')}</select></td>
       <td style="padding:8px 6px;color:var(--text2)">${i.check?fmt(i.check):'—'}</td>
@@ -1481,7 +1579,7 @@ VIEWS.ir = function(v) {
       <td style="padding:8px 6px"><select onchange="irSetStrength('${i.id}',this.value)" style="background:var(--bg2);border:1px solid ${irStrengthCol(i.strength||'New')};color:${irStrengthCol(i.strength||'New')};border-radius:5px;padding:2px 4px;font-size:8px;font-weight:600">${IR_STRENGTHS.map(s=>`<option ${s===(i.strength||'New')?'selected':''}>${s}</option>`).join('')}</select></td>
       <td style="padding:8px 6px;color:var(--text2)">${(i.owner||'—').split(' ')[0]}</td>
       <td style="padding:8px 6px;color:var(--text3);font-size:8px">${i.last||'—'}</td>
-      <td style="padding:8px 6px"><span onclick="irDelete('${i.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
+      <td style="padding:8px 6px;white-space:nowrap;text-align:right"><span onclick="irEmailInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Email">✉</span><span onclick="irCallInvestor('${i.id}')" style="cursor:pointer;margin-right:7px" title="Log call">📞</span><span onclick="irToggleAuto('${i.id}')" style="cursor:pointer;margin-right:7px;opacity:${i.autoOutreach?1:.35}" title="${i.autoOutreach?'Auto-outreach ON — click to disable':'Enable auto-outreach'}">⚡</span><span onclick="irDelete('${i.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
     </tr>`).join('')}
     </tbody>
   </table>
@@ -1586,6 +1684,20 @@ VIEWS.ir = function(v) {
   : (drUrl
       ? `<div style="padding:10px 12px 14px;font-size:8.5px;color:var(--text3)">Your live investor data room is linked above. Optionally use <b>+ Document</b> to also keep an internal register of individual files here.</div>`
       : irEmpty('No documents yet. Track your deck, model, cap table and diligence docs here.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="showAddDoc()">+ Add Document</button>`))}
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Investor Communications</div><span class="badge bdb" style="margin-left:6px">${allComms.length} logged</span>${autoCount?`<span class="badge" style="margin-left:6px;background:rgba(245,166,35,.15);color:#f5c375">⚡ ${autoCount} auto</span>`:''}<button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irRunAutoOutreach()" title="Draft & log an automatic email for every ⚡ investor">⚡ Run Auto-outreach</button></div>
+  <div style="padding:6px 12px 12px">
+    <div style="font-size:8px;color:var(--text3);margin-bottom:4px">Use ✉ / 📞 on any investor to send &amp; log a manual email or call. Toggle ⚡ to include an investor in automatic outreach.</div>
+    ${allComms.length? allComms.slice(0,14).map(cm=>`<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <span style="font-size:12px;width:18px;text-align:center;flex-shrink:0">${cm.type==='call'?'📞':'✉'}</span>
+      <div style="flex:1;min-width:0"><div style="font-size:9.5px;color:var(--text)">${cm.firm} <span style="color:var(--text3)">· ${cm.subject||cm.outcome||cm.type}</span></div>${cm.note?`<div style="font-size:8px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cm.note}</div>`:''}</div>
+      <span class="badge" style="font-size:7px;flex-shrink:0;${cm.mode==='auto'?'background:rgba(245,166,35,.15);color:#f5c375':'background:rgba(46,125,212,.15);color:#78b4f0'}">${cm.mode}</span>
+      <span style="font-size:8px;color:var(--text3);width:54px;text-align:right;flex-shrink:0">${cm.date||''}</span>
+      <span onclick="irRemoveComm('${cm.invId}','${cm.id}')" style="cursor:pointer;color:var(--text3);margin-left:2px;flex-shrink:0" title="Remove">×</span>
+    </div>`).join('') : irEmpty('No calls or emails logged yet. Use ✉ / 📞 on an investor above, or enable ⚡ auto-outreach and Run it.')}
+  </div>
 </div>
 
 <div class="panel" style="margin-top:12px">
