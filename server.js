@@ -315,6 +315,8 @@ api.get('/bootstrap', async (req, res, next) => {
       activities: lists.activities || [],
       sequences: lists.sequences || [],
       investors: lists.investors || [],
+      accounts: lists.accounts || [],
+      prospects: lists.prospects || [],
       settings: (await store.getSingleton('app_settings')) || {},
       config: { dataRoomUrl: DATA_ROOM_URL },
     });
@@ -337,6 +339,8 @@ api.put('/state', async (req, res, next) => {
       activities: Array.isArray(body.activities) ? body.activities : null,
       sequences: Array.isArray(body.sequences) ? body.sequences : null,
       investors: Array.isArray(body.investors) ? body.investors : null,
+      accounts: Array.isArray(body.accounts) ? body.accounts : null,
+      prospects: Array.isArray(body.prospects) ? body.prospects : null,
     };
     for (const col of COLLECTIONS) {
       if (payload[col] !== null) {

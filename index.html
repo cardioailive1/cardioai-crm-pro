@@ -185,6 +185,9 @@ select.inp option{background:var(--bg2)}
     <div class="ni" onclick="go('pipeline',this)"><span class="nic">⟁</span>Pipeline</div>
     <div class="ni" onclick="go('forecasting',this)"><span class="nic">⊛</span>Forecasting</div>
     <div class="ni" onclick="go('ir',this)"><span class="nic">⬢</span>Investor Relations<span class="nn">NEW</span></div>
+    <div class="ns">Customer Success</div>
+    <div class="ni" onclick="go('cs',this)"><span class="nic">◍</span>Customer Success<span class="nn">NEW</span></div>
+    <div class="ni" onclick="go('pipetracker',this)"><span class="nic">⇲</span>Pipeline Tracker<span class="nn">NEW</span></div>
     <div class="ns">Advanced Tools</div>
     <div class="ni" onclick="go('sequencer',this)"><span class="nic">⊳</span>Outreach Sequencer<span class="nn">NEW</span></div>
     <div class="ni" onclick="go('roi',this)"><span class="nic">$</span>ROI Calculator<span class="nn">NEW</span></div>
@@ -298,6 +301,8 @@ function _flushSave() {
     activities: DB.activities,
     sequences: DB.sequences,
     investors: DB.investors,
+    accounts: DB.accounts,
+    prospects: DB.prospects,
     settings: DB.settings,
   };
   API.saveState(payload).catch(e => console.warn('save failed:', e.message));
@@ -360,6 +365,8 @@ const SEED = {
     {id:'n-005',type:'info',icon:'i',title:'AI Score Update',body:'Sarah Kim score +9 → 81. Pricing page visited 4× in 48 hrs.',unread:false,ts:Date.now()-90000000},
     {id:'n-006',type:'warning',icon:'i',title:'Milestone Alert',body:'Pilot study data deadline in 14 days. DatosX action required.',unread:false,ts:Date.now()-172800000},
   ],
+  accounts:[],
+  prospects:[],
   investors:[],
   patients:[
     {id:'CV-00477',age:71,sex:'M',dx:'Heart Failure (EF 30%)',risk:'Critical',pred:'Hospitalization 91%',ecg:'Just now',status:'ALERT',score:91,col:'#e84040'},
@@ -409,6 +416,8 @@ async function hydrateDB() {
     DB.activities = data.activities || [];
     DB.sequences = data.sequences || [];
     DB.investors = data.investors || [];
+    DB.accounts = data.accounts || [];
+    DB.prospects = data.prospects || [];
     DB.settings = data.settings || {};
     APP_CONFIG = Object.assign({ dataRoomUrl:'' }, data.config || {});
   } catch (e) {
@@ -420,6 +429,8 @@ async function hydrateDB() {
     DB.activities = JSON.parse(JSON.stringify(SEED.activities));
     DB.sequences = JSON.parse(JSON.stringify(SEED.sequences));
     DB.investors = JSON.parse(JSON.stringify(SEED.investors||[]));
+    DB.accounts = JSON.parse(JSON.stringify(SEED.accounts||[]));
+    DB.prospects = JSON.parse(JSON.stringify(SEED.prospects||[]));
     DB.settings = { ir:{ round:"Seed", target:0, valuation:"", arr:0, burn:0, runwayMo:0, lois:0, earlyAdopters:0, uniPartners:0, capTable:[], updates:[] } };
     // Offline preview only: falls back to a demo URL so the Data Room card is visible.
     // In production the server's DATA_ROOM_URL env var is the source of truth.
@@ -441,7 +452,7 @@ function resetDB() {
 // ── Mutable state ────────────────────────────
 const DB = {
   contacts:[], deals:{}, tasks:[], notifications:[], patients:[], activities:[],
-  investors:[], sequences:[], settings:{},
+  investors:[], accounts:[], prospects:[], sequences:[], settings:{},
   sq:'', selContact:null, dragId:null, charts:{},
 };
 
@@ -1024,6 +1035,539 @@ function saveDeal() {
   DB.deals[stage].push({id:'d'+Date.now(),name,val:parseInt(document.getElementById('nd-v').value)||0,contact:document.getElementById('nd-c').value||'—',days:0,tier:document.getElementById('nd-t').value});
   closeModal(); toast(name+' added to '+stage,'success'); renderView();
 }
+
+// ══════════════════════════════════════════════
+// NAMED PIPELINE TRACKER  (from Cardio AI pipeline model — stage-weighted, FY forecast coverage)
+// Persisted `prospects` collection. Probability derives from stage; weighted = size × probability.
+// ══════════════════════════════════════════════
+const PT_STAGES = ['Discovery','Demo','Proposal','LOI','Pilot','Definitive agreement','Live','Lost'];
+const PT_PROB = {Discovery:0.05, Demo:0.10, Proposal:0.25, LOI:0.50, Pilot:0.70, 'Definitive agreement':0.90, Live:1.00, Lost:0};
+const PT_STAGE_DEF = {Discovery:'Discovery interview held; need identified', Demo:'Product demonstrated to the buyer', Proposal:'Pricing and scope proposal sent', LOI:'Letter of intent signed', Pilot:'Pilot under way at client site', 'Definitive agreement':'Contract signed; awaiting go-live', Live:'Live and billing', Lost:'Closed lost or paused'};
+const PT_SEGMENTS = ['Enterprise','Payer','Professional'];
+const PT_FYS = ['FY2027','FY2028','FY2029'];
+// Revenue Model V7 forecast — new contracts by segment × FY
+const PT_FORECAST = {Enterprise:{FY2027:15,FY2028:30,FY2029:45}, Professional:{FY2027:10,FY2028:15,FY2029:20}, Payer:{FY2027:10,FY2028:5,FY2029:5}};
+// Conversion logic — stage→stage rate & typical duration (days)
+const PT_CONV = [
+  {from:'Discovery',to:'Demo',rate:0.40,days:30}, {from:'Demo',to:'Proposal',rate:0.50,days:30},
+  {from:'Proposal',to:'LOI',rate:0.50,days:45}, {from:'LOI',to:'Pilot',rate:0.80,days:90},
+  {from:'Pilot',to:'Definitive agreement',rate:0.75,days:120}, {from:'Definitive agreement',to:'Live',rate:0.95,days:60}
+];
+function ptStageCol(s){return ({Discovery:'#8fa8c0',Demo:'#2e7dd4',Proposal:'#7c5cbf',LOI:'#f5a623',Pilot:'#5dcaa5','Definitive agreement':'#1d9e75',Live:'#1d9e75',Lost:'#e84040'})[s]||'#8fa8c0';}
+function ptProb(s){ return PT_PROB[s]!=null?PT_PROB[s]:0; }
+function ptWeighted(p){ return Math.round((p.size||0)*ptProb(p.stage)); }
+function ptIsOpen(p){ return p.stage!=='Lost' && p.stage!=='Live'; }
+
+// ── Prospect CRUD (persisted) ──
+function dbAddProspect(p){ DB.prospects.push(p); dbSaveAndRefresh(); }
+function dbUpdateProspect(id,patch){ const i=DB.prospects.findIndex(x=>x.id===id); if(i>-1){ Object.assign(DB.prospects[i],patch); dbSaveAndRefresh(); return DB.prospects[i]; } }
+function dbDeleteProspect(id){ DB.prospects=DB.prospects.filter(x=>x.id!==id); dbSaveAndRefresh(); }
+function ptSetStage(id,stage){ const p=DB.prospects.find(x=>x.id===id); if(!p) return; dbUpdateProspect(id,{stage}); renderView(); toast(p.org+' → '+stage+' ('+Math.round(ptProb(stage)*100)+'%)', stage==='Live'?'success':stage==='Lost'?'danger':'info'); }
+function ptDelete(id){ const p=DB.prospects.find(x=>x.id===id); if(p&&confirm('Remove '+p.org+' from the pipeline?')){ dbDeleteProspect(id); renderView(); toast('Prospect removed','info'); } }
+
+let PT_FILTER={segment:'',fy:'',stage:''};
+function ptSetFilter(k,val){ PT_FILTER[k]=val; renderView(); }
+
+function ptFormFields(p){
+  p=p||{}; const a=(x)=>String(x==null?'':x).replace(/"/g,'&quot;'); const sel=(opts,cur,blank)=>(blank?`<option value="">${blank}</option>`:'')+opts.map(o=>`<option ${o===cur?'selected':''}>${o}</option>`).join('');
+  const pfx=p.id?'ep':'np';
+  return `
+    <div><label class="flabel">Organization *</label><input class="inp" id="${pfx}-org" value="${a(p.org)}" placeholder="e.g. Valley Health System"/></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Segment</label><select class="inp" id="${pfx}-seg">${sel(PT_SEGMENTS,p.segment||'Enterprise')}</select></div>
+      <div><label class="flabel">Stage</label><select class="inp" id="${pfx}-stage">${sel(PT_STAGES,p.stage||'Discovery')}</select></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Deal size — annual ($)</label><input class="inp" id="${pfx}-size" type="number" value="${p.size||''}" placeholder="800000"/></div>
+      <div><label class="flabel">Close FY</label><select class="inp" id="${pfx}-fy">${sel(PT_FYS,p.fy||'FY2027')}</select></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Expected close date</label><input class="inp" id="${pfx}-close" type="date" value="${a(p.close)}"/></div>
+      <div><label class="flabel">Next step date</label><input class="inp" id="${pfx}-ndate" type="date" value="${a(p.nextDate)}"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Contact</label><input class="inp" id="${pfx}-contact" value="${a(p.contact)}" placeholder="name"/></div>
+      <div><label class="flabel">Title</label><input class="inp" id="${pfx}-title" value="${a(p.title)}" placeholder="title"/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Source / evidence</label><input class="inp" id="${pfx}-src" value="${a(p.source)}" placeholder="e.g. Discovery interview #5"/></div>
+    <div style="margin-top:8px"><label class="flabel">Next step</label><input class="inp" id="${pfx}-next" value="${a(p.nextStep)}" placeholder="e.g. Pilot kickoff after Q-Sub"/></div>
+    <div style="margin-top:8px;font-size:8px;color:var(--text3)">Probability auto-derives from stage (Discovery 5% · Demo 10% · Proposal 25% · LOI 50% · Pilot 70% · Definitive 90% · Live 100%). Weighted value = deal size × probability.</div>`;
+}
+function ptReadForm(pfx){
+  const g=(x)=>document.getElementById(pfx+'-'+x);
+  return {org:g('org').value.trim(), segment:g('seg').value, stage:g('stage').value, size:irMoney(g('size').value),
+    fy:g('fy').value, close:g('close').value, nextDate:g('ndate').value, contact:g('contact').value.trim(), title:g('title').value.trim(),
+    source:g('src').value.trim(), nextStep:g('next').value.trim()};
+}
+function showAddProspect(){
+  modal(`<div class="mh"><div class="mt">Add Prospect</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">${ptFormFields(null)}</div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="saveProspect()">Add Prospect</button></div>`);
+}
+function saveProspect(){ const d=ptReadForm('np'); if(!d.org){ toast('Enter an organization','danger'); return; } dbAddProspect(Object.assign({id:newId('pr'),createdTs:Date.now()},d)); closeModal(); renderView(); toast(d.org+' added to pipeline','success'); }
+function ptEditProspect(id){
+  const p=DB.prospects.find(x=>x.id===id); if(!p) return;
+  modal(`<div class="mh"><div class="mt">Edit Prospect</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">${ptFormFields(p)}</div>
+  <div class="mf"><button class="btn bg2" style="color:var(--red2)" onclick="ptDelete('${id}');closeModal()">Delete</button><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="ptUpdateProspect('${id}')">Save changes</button></div>`);
+}
+function ptUpdateProspect(id){ const d=ptReadForm('ep'); if(!d.org){ toast('Enter an organization','danger'); return; } dbUpdateProspect(id,d); closeModal(); renderView(); toast(d.org+' updated','success'); }
+
+// ── CSV import ──
+const PT_COLMAP={org:['organization','org','account','company','prospect'],segment:['segment','seg'],stage:['stage','status'],size:['dealsize','size','deal','value','annual','acv'],fy:['closefy','fy','fiscalyear'],close:['expectedclose','closedate','close','expected'],source:['source','evidence','sourceevidence'],nextStep:['nextstep','next'],nextDate:['nextstepdate','nextdate'],contact:['contact','contactname'],title:['title','contacttitle']};
+function ptMatchCols(hs){const n=hs.map(h=>String(h).trim().toLowerCase().replace(/[^a-z0-9]/g,''));const idx={};for(const[f,al]of Object.entries(PT_COLMAP)){for(let i=0;i<n.length;i++){if(al.includes(n[i])){idx[f]=i;break;}}}return idx;}
+function ptRowTo(cells,idx){const get=f=>idx[f]!=null?String(cells[idx[f]]==null?'':cells[idx[f]]).trim():'';const org=get('org');if(!org)return null;const stage=idx.stage!=null?(PT_STAGES.find(s=>s.toLowerCase()===get('stage').toLowerCase())||'Discovery'):'Discovery';return {id:newId('pr'),org,segment:get('segment')||'Enterprise',stage,size:irMoney(get('size')),fy:get('fy')||'',close:get('close'),source:get('source'),nextStep:get('nextStep'),nextDate:get('nextDate'),contact:get('contact'),title:get('title'),createdTs:Date.now()};}
+let PT_IMPORT=null;
+function showImportProspects(){PT_IMPORT=null;modal(`<div class="mh"><div class="mt">Import Pipeline (CSV)</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb"><div style="font-size:9px;color:var(--text3);margin-bottom:8px">First row = headers. Recognized: <b style="color:var(--text2)">organization, segment, stage, deal size, close fy, expected close, source, next step</b>. <a href="#" onclick="ptTemplate();return false" style="color:var(--blue2)">Download template</a></div>
+  <input type="file" id="pt-file" accept=".csv,text/csv" onchange="ptFilePicked(event)" style="font-size:9px;margin-bottom:8px;color:var(--text2)"/>
+  <textarea class="inp" id="pt-csv" placeholder="organization,segment,stage,deal size,close fy,expected close&#10;Valley Health,Enterprise,Proposal,800000,FY2027,2027-12-31" style="width:100%;height:120px;font-family:monospace;font-size:9px;resize:vertical" oninput="ptPreview()"></textarea>
+  <div id="pt-prev" style="font-size:9px;color:var(--text3);margin-top:8px"></div></div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="ptImport()">Import</button></div>`);}
+function ptFilePicked(ev){const f=ev.target.files&&ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{document.getElementById('pt-csv').value=r.result;ptPreview();};r.readAsText(f);}
+function ptPreview(){const text=document.getElementById('pt-csv').value.trim();const el=document.getElementById('pt-prev');PT_IMPORT=null;if(!text){el.textContent='';return;}const rows=irParseCSV(text);if(rows.length<2){el.innerHTML='<span style="color:var(--amber2)">Need a header row plus data.</span>';return;}const idx=ptMatchCols(rows[0]);if(idx.org==null){el.innerHTML='<span style="color:var(--red2)">No “organization” column found.</span>';return;}const parsed=rows.slice(1).map(r=>ptRowTo(r,idx)).filter(Boolean);PT_IMPORT=parsed;el.innerHTML='<span style="color:var(--teal2)">✓ '+parsed.length+' prospect'+(parsed.length===1?'':'s')+' ready</span> — columns: '+Object.keys(idx).join(', ');}
+function ptImport(){const text=document.getElementById('pt-csv').value.trim();if(!text){toast('Paste CSV or choose a file','danger');return;}if(!PT_IMPORT)ptPreview();const p=PT_IMPORT;if(!p||!p.length){toast('Nothing to import','danger');return;}p.forEach(x=>DB.prospects.push(x));dbSaveAndRefresh();closeModal();renderView();toast(p.length+' prospect'+(p.length===1?'':'s')+' imported','success');}
+function ptTemplate(){const csv='organization,segment,stage,deal size,close fy,expected close,source,next step\nValley Health System,Enterprise,Proposal,800000,FY2027,2027-12-31,Discovery interview #5,Pilot after Q-Sub\nStatewide Payer,Payer,Demo,3360000,FY2027,2027-09-30,Payer discovery,Follow-up\n';const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='pipeline-template.csv';a.click();}
+
+// ── View ──
+VIEWS.pipetracker = function(v){
+  const all = DB.prospects||[];
+  const F=PT_FILTER;
+  const rows = all.filter(p=>(!F.segment||p.segment===F.segment)&&(!F.fy||p.fy===F.fy)&&(!F.stage||p.stage===F.stage));
+  const open = rows.filter(ptIsOpen);
+  const totalVal = open.reduce((s,p)=>s+(p.size||0),0);
+  const weighted = rows.reduce((s,p)=>s+ptWeighted(p),0);
+  const wCount = rows.reduce((s,p)=>s+ptProb(p.stage),0);
+  const avg = open.length?Math.round(totalVal/open.length):0;
+  const byStage = PT_STAGES.filter(s=>s!=='Lost').map(s=>({s,n:rows.filter(p=>p.stage===s).length,w:rows.filter(p=>p.stage===s).reduce((t,p)=>t+ptWeighted(p),0)}));
+  // Summary vs forecast — segment × FY (uses full set, not filter, for the model view)
+  const segFy=[];
+  PT_SEGMENTS.forEach(seg=>PT_FYS.forEach(fy=>{
+    const grp=all.filter(p=>p.segment===seg&&p.fy===fy&&p.stage!=='Lost');
+    if(!grp.length && !(PT_FORECAST[seg]&&PT_FORECAST[seg][fy])) return;
+    const wc=grp.reduce((s,p)=>s+ptProb(p.stage),0); const wv=grp.reduce((s,p)=>s+ptWeighted(p),0);
+    const fc=(PT_FORECAST[seg]&&PT_FORECAST[seg][fy])||0;
+    segFy.push({seg,fy,deals:grp.length,wc,wv,fc,cov:fc?wc/fc:0,gap:fc-wc});
+  }));
+  const chip=(l,val,sub,col)=>`<div class="mc ${col}"><div class="ml">${l}</div><div class="mv">${val}</div><div class="md">${sub||''}</div></div>`;
+  const fopt=(cur,opts,blank)=>`<option value="">${blank}</option>`+opts.map(o=>`<option ${o===cur?'selected':''}>${o}</option>`).join('');
+
+  v.innerHTML = `
+<div class="ir-topbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:10px">
+    <div style="width:30px;height:30px;border-radius:8px;background:rgba(124,92,191,.14);border:1px solid rgba(124,92,191,.3);display:flex;align-items:center;justify-content:center;font-size:15px">⇲</div>
+    <div><div style="font-size:13px;font-weight:700;color:var(--text);line-height:1.15">Named Pipeline Tracker</div><div style="font-size:8.5px;color:var(--text3)">Stage-weighted pipeline vs Revenue Model V7 · ${all.length} prospects</div></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap">
+    <select onchange="ptSetFilter('segment',this.value)" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:5px 8px;font-size:9px;color:var(--text)">${fopt(F.segment,PT_SEGMENTS,'All segments')}</select>
+    <select onchange="ptSetFilter('fy',this.value)" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:5px 8px;font-size:9px;color:var(--text)">${fopt(F.fy,PT_FYS,'All FYs')}</select>
+    <select onchange="ptSetFilter('stage',this.value)" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:5px 8px;font-size:9px;color:var(--text)">${fopt(F.stage,PT_STAGES,'All stages')}</select>
+    <input id="pt-search" oninput="ptFilterRows(this.value)" placeholder="Search…" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:5px 9px;font-size:9px;color:var(--text);width:120px;outline:none"/>
+    <button class="btn bg2" style="padding:5px 9px;font-size:9px" onclick="showImportProspects()">↑ Import</button>
+    <button class="btn bp2" style="padding:5px 9px;font-size:9px" onclick="showAddProspect()">+ Prospect</button>
+  </div>
+</div>
+
+<div class="g4">
+  ${chip('Pipeline Value', fmt(totalVal), open.length+' open deals', 'ct')}
+  ${chip('Weighted Pipeline', fmt(weighted), wCount.toFixed(1)+' weighted contracts', 'cb')}
+  ${chip('Open Deals', open.length, (F.segment||F.fy||F.stage)?'filtered':all.length+' total', 'ca')}
+  ${chip('Avg Deal Size', fmt(avg), 'first-year ACV', 'cr')}
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Pipeline Funnel</div><span class="badge bdt" style="margin-left:auto">weighted ${fmt(weighted)}</span></div>
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:12px">
+    ${byStage.map(b=>`<div style="text-align:center;background:var(--bg2);border:1px solid var(--border);border-top:2px solid ${ptStageCol(b.s)};border-radius:6px;padding:8px 4px"><div style="font-size:17px;font-weight:700;color:var(--text)">${b.n}</div><div style="font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:1px">${b.s==='Definitive agreement'?'Def. Agr.':b.s}</div><div style="font-size:7.5px;color:${ptStageCol(b.s)};margin-top:3px">${Math.round(ptProb(b.s)*100)}% · ${b.w?fmt(b.w):'—'}</div></div>`).join('')}
+  </div>
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Named Pipeline</div><span class="badge bdb" style="margin-left:auto">${rows.length} shown</span></div>
+  ${rows.length?`
+  <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:9.5px">
+    <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="padding:7px 10px">Organization</th><th style="padding:7px 6px">Segment</th><th style="padding:7px 6px">Stage</th><th style="padding:7px 6px">Deal size</th><th style="padding:7px 6px">Prob</th><th style="padding:7px 6px">Weighted</th><th style="padding:7px 6px">Close FY</th><th style="padding:7px 6px">Next step</th><th style="padding:7px 6px"></th>
+    </tr></thead><tbody id="pt-rows">
+    ${rows.map(p=>`<tr data-search="${(p.org+' '+(p.segment||'')+' '+p.stage+' '+(p.fy||'')+' '+(p.source||'')+' '+(p.nextStep||'')).toLowerCase().replace(/"/g,'')}" style="border-top:1px solid rgba(255,255,255,.05)">
+      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)"><span onclick="ptEditProspect('${p.id}')" style="cursor:pointer" title="Edit">${p.org}</span></div>${p.source?`<div style="font-size:8px;color:var(--text3);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.source}</div>`:''}</td>
+      <td style="padding:8px 6px;color:var(--text2)">${p.segment||'—'}</td>
+      <td style="padding:8px 6px"><select onchange="ptSetStage('${p.id}',this.value)" style="background:var(--bg2);border:1px solid ${ptStageCol(p.stage)};color:${ptStageCol(p.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${PT_STAGES.map(s=>`<option ${s===p.stage?'selected':''}>${s}</option>`).join('')}</select></td>
+      <td style="padding:8px 6px;color:var(--text2)">${p.size?fmt(p.size):'—'}</td>
+      <td style="padding:8px 6px;color:var(--text3)">${Math.round(ptProb(p.stage)*100)}%</td>
+      <td style="padding:8px 6px;font-weight:600;color:var(--teal2)">${fmt(ptWeighted(p))}</td>
+      <td style="padding:8px 6px;color:var(--text2)">${p.fy||'—'}</td>
+      <td style="padding:8px 6px;color:var(--text3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.nextStep||'—'}</td>
+      <td style="padding:8px 6px;white-space:nowrap;text-align:right"><span onclick="ptEditProspect('${p.id}')" style="cursor:pointer;margin-right:7px" title="Edit">✎</span><span onclick="ptDelete('${p.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
+    </tr>`).join('')}
+    </tbody></table></div>`:irEmpty('No prospects match the current filters.', all.length?'':`<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="showAddProspect()">+ Add Prospect</button>`)}
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Weighted Pipeline vs Revenue Model V7</div><span class="badge bdt" style="margin-left:auto">coverage = weighted ÷ forecast</span></div>
+  <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:9.5px">
+    <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="padding:7px 10px">Segment</th><th style="padding:7px 6px">Close FY</th><th style="padding:7px 6px">Deals</th><th style="padding:7px 6px">Weighted contracts</th><th style="padding:7px 6px">Weighted value</th><th style="padding:7px 6px">V7 forecast</th><th style="padding:7px 6px">Coverage</th><th style="padding:7px 6px">Gap</th>
+    </tr></thead><tbody>
+    ${segFy.map(r=>`<tr style="border-top:1px solid rgba(255,255,255,.05)">
+      <td style="padding:7px 10px;color:var(--text);font-weight:600">${r.seg}</td><td style="padding:7px 6px;color:var(--text2)">${r.fy}</td>
+      <td style="padding:7px 6px;color:var(--text2)">${r.deals}</td><td style="padding:7px 6px;color:var(--text2)">${r.wc.toFixed(1)}</td>
+      <td style="padding:7px 6px;color:var(--text2)">${fmt(r.wv)}</td><td style="padding:7px 6px;color:var(--text3)">${r.fc}</td>
+      <td style="padding:7px 6px;font-weight:700;color:${r.cov>=0.5?'#1d9e75':r.cov>=0.25?'#f5a623':'#e84040'}">${Math.round(r.cov*100)}%</td>
+      <td style="padding:7px 6px;color:var(--text3)">${r.gap.toFixed(1)}</td>
+    </tr>`).join('')}
+    </tbody></table></div>
+  <div style="font-size:8px;color:var(--text3);padding:8px 12px">Coverage below 50% (red) means the V7 forecast is ahead of the named pipeline. Weighted contracts = Σ stage probability.</div>
+</div>
+
+<div style="display:grid;grid-template-columns:1.2fr 1fr;gap:12px;margin-top:12px">
+  <div class="panel">
+    <div class="ph"><div class="pt2">Weighted Value by Stage</div></div>
+    <div style="padding:12px"><div style="height:150px"><canvas id="pt-stage-ch"></canvas></div></div>
+  </div>
+  <div class="panel">
+    <div class="ph"><div class="pt2">Conversion Logic</div></div>
+    <div style="padding:8px 12px">
+      ${PT_CONV.map(c=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:9px"><span style="flex:1;color:var(--text2)">${c.from} → ${c.to}</span><span style="color:var(--teal2);font-weight:600">${Math.round(c.rate*100)}%</span><span style="color:var(--text3);width:46px;text-align:right">${c.days}d</span></div>`).join('')}
+      <div style="margin-top:8px;font-size:8px;color:var(--text3)">Discovery→Live: <b style="color:var(--text2)">5.7%</b> over ~375 days · ~18 discovery conversations per live contract.</div>
+    </div>
+  </div>
+</div>`;
+
+  if(rows.length) ar(()=>{
+    makeChart('pt-stage-ch','bar', byStage.map(b=>b.s==='Definitive agreement'?'Def. Agr.':b.s), [{data:byStage.map(b=>b.w), backgroundColor:byStage.map(b=>ptStageCol(b.s)), borderRadius:4, maxBarThickness:40}], {plugins:{tooltip:{callbacks:{label:(x)=>' '+fmt(x.raw)}}},scales:{y:{ticks:{callback:(val)=>'$'+(val>=1e6?(val/1e6)+'M':val>=1e3?(val/1e3)+'K':val)}}}});
+  });
+};
+function ptFilterRows(q){ q=String(q||'').toLowerCase().trim(); document.querySelectorAll('#pt-rows tr').forEach(tr=>{ const hay=tr.getAttribute('data-search')||''; tr.style.display=(!q||hay.indexOf(q)>-1)?'':'none'; }); }
+
+
+// ══════════════════════════════════════════════
+// CUSTOMER SUCCESS  (post-sale accounts — health, renewals, churn, onboarding)
+// Fully dynamic & persisted (accounts collection). No hardcoded data.
+// ══════════════════════════════════════════════
+const CS_STAGES = ['Onboarding','Adopting','Established','At-Risk','Churned'];
+const CS_TIERS  = ['Enterprise','Pro','Starter'];
+const CS_TYPES  = ['Hospital','Health System','Clinic','Cardiology Group','Research','Payer'];
+const CS_ACT_TYPES = ['QBR','Check-in','Onboarding','Training','Support Escalation','Executive Review','Renewal Call'];
+function csStageCol(s){return ({Onboarding:'#2e7dd4',Adopting:'#7c5cbf',Established:'#1d9e75','At-Risk':'#f5a623',Churned:'#e84040'})[s]||'#8fa8c0';}
+function csClamp(v){ return Math.max(0,Math.min(100,parseInt(v)||0)); }
+
+// Composite health score: usage 35% · adoption 30% · sentiment 25% · support 10% (manual override wins)
+function csHealth(a){
+  if(a.healthOverride!=null && a.healthOverride!=='') return csClamp(a.healthOverride);
+  const support = Math.max(0, 100 - (parseInt(a.tickets)||0)*15);
+  return Math.round((a.usage||0)*0.35 + (a.adoption||0)*0.30 + (a.sentiment||0)*0.25 + support*0.10);
+}
+function csBand(h){ return h>=70?'Healthy':h>=45?'Neutral':'At-Risk'; }
+function csHealthCol(h){ return h>=70?'#1d9e75':h>=45?'#f5a623':'#e84040'; }
+function csDays(a){ if(!a.renewalDate) return null; const d=new Date(a.renewalDate); if(isNaN(d)) return null; return Math.round((d-new Date())/86400000); }
+function csRenewalCol(d){ return d==null?'var(--text3)': d<0?'#e84040': d<=30?'#e84040': d<=90?'#f5a623':'#1d9e75'; }
+function csIsActive(a){ return a.stage!=='Churned'; }
+function csIsRisk(a){ return a.stage!=='Churned' && (a.stage==='At-Risk' || csHealth(a)<45); }
+
+// Rule-based playbook — recommended next actions per account
+function csPlaybook(a){
+  const out=[]; const h=csHealth(a); const d=csDays(a);
+  if(a.stage==='Churned') return ['Run win-back / exit interview'];
+  if(h<45) out.push('Launch recovery QBR — health critical');
+  if(d!=null && d<0) out.push('Renewal overdue — '+Math.abs(d)+'d past');
+  else if(d!=null && d<=30 && d>=0) out.push('Confirm renewal — '+d+'d out');
+  if(h>=45 && h<70) out.push('Proactive check-in — health slipping');
+  if((parseInt(a.tickets)||0)>=3) out.push('Escalate open support ('+a.tickets+' tickets)');
+  if(a.stage==='Onboarding' && (a.onboarding||0)<60) out.push('Accelerate onboarding ('+(a.onboarding||0)+'% complete)');
+  if((a.adoption||0)<50 && a.stage!=='Onboarding') out.push('Drive adoption — low feature usage');
+  if((a.upsell||0)>0 && h>=70) out.push('Pursue expansion ('+fmt(a.upsell)+')');
+  if(!out.length) out.push('Healthy — maintain cadence');
+  return out;
+}
+
+// ── Account CRUD (persisted via saveDB → PUT /api/state) ──
+function dbAddAccount(a){ DB.accounts.push(a); dbSaveAndRefresh(); }
+function dbUpdateAccount(id,patch){ const i=DB.accounts.findIndex(x=>x.id===id); if(i>-1){ Object.assign(DB.accounts[i],patch); dbSaveAndRefresh(); return DB.accounts[i]; } }
+function dbDeleteAccount(id){ DB.accounts=DB.accounts.filter(x=>x.id!==id); dbSaveAndRefresh(); }
+function csSetStage(id,stage){ const a=DB.accounts.find(x=>x.id===id); if(!a) return; dbUpdateAccount(id,{stage}); renderView(); toast(a.name+' → '+stage, stage==='Churned'?'danger':stage==='Established'?'success':'info'); }
+function csDelete(id){ const a=DB.accounts.find(x=>x.id===id); if(a&&confirm('Remove '+a.name+' from Customer Success?')){ dbDeleteAccount(id); renderView(); toast('Account removed','info'); } }
+
+function csAcctFormFields(a){
+  a=a||{}; const v=(x)=>String(x==null?'':x).replace(/"/g,'&quot;'); const sel=(opts,cur)=>opts.map(o=>`<option ${o===cur?'selected':''}>${o}</option>`).join('');
+  const pfx=a.id?'ea':'na';
+  return `
+    <div><label class="flabel">Account name *</label><input class="inp" id="${pfx}-name" value="${v(a.name)}" placeholder="e.g. Mount Sinai Health System"/></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div><label class="flabel">Type</label><select class="inp" id="${pfx}-type">${sel(CS_TYPES,a.type||'Hospital')}</select></div>
+      <div><label class="flabel">Tier</label><select class="inp" id="${pfx}-tier">${sel(CS_TIERS,a.tier||'Pro')}</select></div>
+      <div><label class="flabel">Stage</label><select class="inp" id="${pfx}-stage">${sel(CS_STAGES,a.stage||'Onboarding')}</select></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div><label class="flabel">ARR ($)</label><input class="inp" id="${pfx}-arr" type="number" value="${a.arr||''}" placeholder="0"/></div>
+      <div><label class="flabel">Seats</label><input class="inp" id="${pfx}-seats" type="number" value="${a.seats||''}" placeholder="0"/></div>
+      <div><label class="flabel">Active users</label><input class="inp" id="${pfx}-active" type="number" value="${a.activeUsers||''}" placeholder="0"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">CSM owner</label><input class="inp" id="${pfx}-csm" value="${v(a.csm)}" placeholder="Success manager"/></div>
+      <div><label class="flabel">Onboarding % complete</label><input class="inp" id="${pfx}-onb" type="number" value="${a.onboarding||''}" placeholder="0-100"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Start date</label><input class="inp" id="${pfx}-start" type="date" value="${v(a.startDate)}"/></div>
+      <div><label class="flabel">Renewal date</label><input class="inp" id="${pfx}-renew" type="date" value="${v(a.renewalDate)}"/></div>
+    </div>
+    <div style="margin-top:10px;font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Health inputs (0-100) — drive the composite score</div>
+    <div style="margin-top:4px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
+      <div><label class="flabel">Usage</label><input class="inp" id="${pfx}-usage" type="number" value="${a.usage||''}" placeholder="0-100"/></div>
+      <div><label class="flabel">Adoption</label><input class="inp" id="${pfx}-adopt" type="number" value="${a.adoption||''}" placeholder="0-100"/></div>
+      <div><label class="flabel">Sentiment</label><input class="inp" id="${pfx}-sent" type="number" value="${a.sentiment||''}" placeholder="0-100"/></div>
+      <div><label class="flabel">Open tickets</label><input class="inp" id="${pfx}-tix" type="number" value="${a.tickets||''}" placeholder="0"/></div>
+    </div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div><label class="flabel">NPS (-100 to 100)</label><input class="inp" id="${pfx}-nps" type="number" value="${a.nps!=null?a.nps:''}" placeholder=""/></div>
+      <div><label class="flabel">Upsell / expansion ($)</label><input class="inp" id="${pfx}-upsell" type="number" value="${a.upsell||''}" placeholder="0"/></div>
+      <div><label class="flabel">Health override (blank = auto)</label><input class="inp" id="${pfx}-hover" type="number" value="${a.healthOverride!=null?a.healthOverride:''}" placeholder="auto"/></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Risk / notes</label><input class="inp" id="${pfx}-notes" value="${v(a.notes)}" placeholder="e.g. champion left, low ICU adoption"/></div>`;
+}
+function csReadForm(pfx){
+  const g=(x)=>document.getElementById(pfx+'-'+x);
+  return {
+    name:g('name').value.trim(), type:g('type').value, tier:g('tier').value, stage:g('stage').value,
+    arr:irMoney(g('arr').value), seats:parseInt(g('seats').value)||0, activeUsers:parseInt(g('active').value)||0,
+    csm:g('csm').value.trim()||'—', onboarding:csClamp(g('onb').value),
+    startDate:g('start').value, renewalDate:g('renew').value,
+    usage:csClamp(g('usage').value), adoption:csClamp(g('adopt').value), sentiment:csClamp(g('sent').value),
+    tickets:parseInt(g('tix').value)||0, nps:g('nps').value===''?null:parseInt(g('nps').value),
+    upsell:irMoney(g('upsell').value), healthOverride:g('hover').value===''?null:csClamp(g('hover').value),
+    notes:g('notes').value.trim()
+  };
+}
+function showAddAccount(){
+  modal(`<div class="mh"><div class="mt">Add Customer Account</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">${csAcctFormFields(null)}</div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="saveAccount()">Add Account</button></div>`);
+}
+function saveAccount(){
+  const d=csReadForm('na'); if(!d.name){ toast('Enter an account name','danger'); return; }
+  dbAddAccount(Object.assign({id:newId('acc'), activities:[], createdTs:Date.now()}, d));
+  closeModal(); renderView(); toast(d.name+' added to Customer Success','success');
+}
+function csEditAccount(id){
+  const a=DB.accounts.find(x=>x.id===id); if(!a) return;
+  modal(`<div class="mh"><div class="mt">Edit Account</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">${csAcctFormFields(a)}</div>
+  <div class="mf"><button class="btn bg2" style="color:var(--red2)" onclick="csDelete('${id}');closeModal()">Delete</button><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="csUpdateAccount('${id}')">Save changes</button></div>`);
+}
+function csUpdateAccount(id){
+  const d=csReadForm('ea'); if(!d.name){ toast('Enter an account name','danger'); return; }
+  dbUpdateAccount(id,d); closeModal(); renderView(); toast(d.name+' updated','success');
+}
+
+// ── Activity / QBR logging ──
+function csLogActivity(id){
+  const a=DB.accounts.find(x=>x.id===id); if(!a) return;
+  modal(`<div class="mh"><div class="mt">Log Activity — ${a.name}</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div><label class="flabel">Type</label><select class="inp" id="ca-type">${CS_ACT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select></div>
+      <div><label class="flabel">Outcome</label><select class="inp" id="ca-out"><option>Positive</option><option>Neutral</option><option>Needs follow-up</option><option>At-risk signal</option></select></div>
+    </div>
+    <div style="margin-top:8px"><label class="flabel">Notes</label><textarea class="inp" id="ca-note" style="width:100%;height:90px;resize:vertical" placeholder="What was discussed, outcomes, next steps…"></textarea></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="csSaveActivity('${id}')">Log activity</button></div>`);
+}
+function csSaveActivity(id){
+  const a=DB.accounts.find(x=>x.id===id); if(!a) return;
+  if(!a.activities) a.activities=[];
+  a.activities.unshift({id:newId('ac'), ts:Date.now(), date:'Just now', type:document.getElementById('ca-type').value, outcome:document.getElementById('ca-out').value, note:(document.getElementById('ca-note').value||'').trim()});
+  dbSaveAndRefresh(); closeModal(); renderView(); toast('Activity logged for '+a.name,'success');
+}
+function csRemoveActivity(accId, actId){ const a=DB.accounts.find(x=>x.id===accId); if(!a||!a.activities) return; a.activities=a.activities.filter(x=>x.id!==actId); dbSaveAndRefresh(); renderView(); }
+
+// ── CSV import (reuses irParseCSV) ──
+const CS_COLMAP={
+  name:['account','name','customer','company','hospital','organization'],
+  type:['type','category'], tier:['tier','plan','package'], stage:['stage','status','lifecycle'],
+  arr:['arr','revenue','value','contract','acv'], seats:['seats','licenses','users'], activeUsers:['activeusers','active','mau'],
+  csm:['csm','owner','manager','success'], onboarding:['onboarding','onboard'],
+  startDate:['startdate','start','golive'], renewalDate:['renewaldate','renewal','renew','expiry','expiration'],
+  usage:['usage'], adoption:['adoption','adopt'], sentiment:['sentiment','csat'], tickets:['tickets','support','opentickets'],
+  nps:['nps'], upsell:['upsell','expansion'], notes:['notes','note','risk','comment']
+};
+function csMatchCols(headers){ const norm=headers.map(h=>String(h).trim().toLowerCase().replace(/[^a-z0-9]/g,'')); const idx={}; for(const[f,al] of Object.entries(CS_COLMAP)){ for(let i=0;i<norm.length;i++){ if(al.includes(norm[i])){ idx[f]=i; break; } } } return idx; }
+function csRowToAccount(cells, idx){
+  const get=f=> idx[f]!=null?String(cells[idx[f]]==null?'':cells[idx[f]]).trim():'';
+  const name=get('name'); if(!name) return null;
+  const stage=idx.stage!=null?(CS_STAGES.find(s=>s.toLowerCase()===get('stage').toLowerCase())||'Adopting'):'Adopting';
+  return {
+    id:newId('acc'), name, type:get('type')||'Hospital', tier:get('tier')||'Pro', stage,
+    arr:irMoney(get('arr')), seats:parseInt(get('seats'))||0, activeUsers:parseInt(get('activeUsers'))||0,
+    csm:get('csm')||'—', onboarding:csClamp(get('onboarding')), startDate:get('startDate'), renewalDate:get('renewalDate'),
+    usage:csClamp(get('usage')), adoption:csClamp(get('adoption')), sentiment:csClamp(get('sentiment')), tickets:parseInt(get('tickets'))||0,
+    nps:get('nps')===''?null:parseInt(get('nps')), upsell:irMoney(get('upsell')), notes:get('notes'), healthOverride:null, activities:[], createdTs:Date.now()
+  };
+}
+let CS_IMPORT_PARSED=null;
+function showImportAccounts(){
+  CS_IMPORT_PARSED=null;
+  modal(`<div class="mh"><div class="mt">Import Accounts (CSV)</div><div style="cursor:pointer;color:var(--text3);font-size:18px" onclick="closeModal()">×</div></div>
+  <div class="mb">
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px">Upload a .csv or paste rows. First row = headers. Recognized: <b style="color:var(--text2)">account, type, tier, stage, arr, seats, csm, onboarding, renewal, usage, adoption, sentiment, tickets, nps, upsell, notes</b>. <a href="#" onclick="csDownloadTemplate();return false" style="color:var(--blue2)">Download template</a></div>
+    <input type="file" id="cs-file" accept=".csv,text/csv" onchange="csFilePicked(event)" style="font-size:9px;margin-bottom:8px;color:var(--text2)"/>
+    <textarea class="inp" id="cs-csv" placeholder="account,tier,stage,arr,renewal,usage,adoption&#10;Mount Sinai,Enterprise,Established,480000,2026-12-01,82,78" style="width:100%;height:120px;font-family:monospace;font-size:9px;resize:vertical" oninput="csPreview()"></textarea>
+    <div id="cs-prev" style="font-size:9px;color:var(--text3);margin-top:8px"></div>
+  </div>
+  <div class="mf"><button class="btn bg2" onclick="closeModal()">Cancel</button><button class="btn bp2" onclick="csImport()">Import</button></div>`);
+}
+function csFilePicked(ev){ const f=ev.target.files&&ev.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ document.getElementById('cs-csv').value=r.result; csPreview(); }; r.readAsText(f); }
+function csPreview(){
+  const text=document.getElementById('cs-csv').value.trim(); const el=document.getElementById('cs-prev'); CS_IMPORT_PARSED=null;
+  if(!text){ el.textContent=''; return; }
+  const rows=irParseCSV(text); if(rows.length<2){ el.innerHTML='<span style="color:var(--amber2)">Need a header row plus at least one data row.</span>'; return; }
+  const idx=csMatchCols(rows[0]); if(idx.name==null){ el.innerHTML='<span style="color:var(--red2)">No “account” column found.</span>'; return; }
+  const parsed=rows.slice(1).map(r=>csRowToAccount(r,idx)).filter(Boolean); CS_IMPORT_PARSED=parsed;
+  el.innerHTML=`<span style="color:var(--teal2)">✓ ${parsed.length} account${parsed.length===1?'':'s'} ready</span> — columns: ${Object.keys(idx).join(', ')}`;
+}
+function csImport(){
+  const text=document.getElementById('cs-csv').value.trim(); if(!text){ toast('Paste CSV or choose a file','danger'); return; }
+  if(!CS_IMPORT_PARSED) csPreview(); const parsed=CS_IMPORT_PARSED;
+  if(!parsed||!parsed.length){ toast('Nothing to import — check the format','danger'); return; }
+  parsed.forEach(a=>DB.accounts.push(a)); dbSaveAndRefresh(); closeModal(); renderView();
+  toast(parsed.length+' account'+(parsed.length===1?'':'s')+' imported','success');
+}
+function csDownloadTemplate(){
+  const csv='account,type,tier,stage,arr,seats,csm,onboarding,renewal,usage,adoption,sentiment,tickets,nps,upsell,notes\n'
+   +'Mount Sinai Health System,Health System,Enterprise,Established,480000,120,A. Chen,100,2026-12-01,84,80,78,1,62,75000,Strong ICU adoption\n'
+   +'Cleveland Clinic,Hospital,Pro,At-Risk,180000,40,J. Park,100,2026-11-15,48,42,55,4,20,0,Champion left; low usage\n';
+  const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download='cs-accounts-template.csv'; a.click();
+}
+
+// ── View ──
+VIEWS.cs = function(v){
+  const A = DB.accounts||[];
+  const active = A.filter(csIsActive);
+  const churned = A.filter(a=>a.stage==='Churned');
+  const activeARR = active.reduce((s,a)=>s+(a.arr||0),0);
+  const churnedARR = churned.reduce((s,a)=>s+(a.arr||0),0);
+  const expansion = active.reduce((s,a)=>s+(a.upsell||0),0);
+  const baseARR = activeARR + churnedARR;
+  const grr = baseARR>0 ? Math.round(activeARR/baseARR*100) : 0;
+  const nrr = baseARR>0 ? Math.round((activeARR+expansion)/baseARR*100) : 0;
+  const avgHealth = active.length ? Math.round(active.reduce((s,a)=>s+csHealth(a),0)/active.length) : 0;
+  const risk = active.filter(csIsRisk);
+  const riskARR = risk.reduce((s,a)=>s+(a.arr||0),0);
+  const renew90 = active.filter(a=>{const d=csDays(a); return d!=null && d>=0 && d<=90;}).sort((a,b)=>csDays(a)-csDays(b));
+  const renew90ARR = renew90.reduce((s,a)=>s+(a.arr||0),0);
+  const onboarding = active.filter(a=>a.stage==='Onboarding');
+  const logoChurn = A.length ? Math.round(churned.length/A.length*100) : 0;
+  const allActs = A.flatMap(a=>(a.activities||[]).map(x=>Object.assign({acc:a.name,accId:a.id},x))).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const bands = {Healthy:active.filter(a=>csHealth(a)>=70).length, Neutral:active.filter(a=>{const h=csHealth(a);return h>=45&&h<70;}).length, 'At-Risk':active.filter(a=>csHealth(a)<45).length};
+  const byStageArr = CS_STAGES.map(s=>A.filter(a=>a.stage===s).reduce((t,a)=>t+(a.arr||0),0));
+  const tile=(l,val,sub,col)=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${l}</div><div style="font-size:15px;font-weight:700;color:${col||'var(--text)'};margin-top:2px">${val}</div><div style="font-size:8px;color:var(--text3);margin-top:1px">${sub||''}</div></div>`;
+
+  v.innerHTML = `
+<div class="ir-topbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:10px">
+    <div style="width:30px;height:30px;border-radius:8px;background:rgba(29,158,117,.12);border:1px solid rgba(29,158,117,.3);display:flex;align-items:center;justify-content:center;font-size:15px">◍</div>
+    <div><div style="font-size:13px;font-weight:700;color:var(--text);line-height:1.15">Customer Success</div><div style="font-size:8.5px;color:var(--text3)">Health, renewals, churn risk &amp; onboarding · ${active.length} active account${active.length===1?'':'s'}</div></div>
+  </div>
+  ${activeARR>0?`<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:rgba(29,158,117,.08);border:1px solid rgba(29,158,117,.2);border-radius:7px"><span style="font-size:7.5px;color:var(--text3);letter-spacing:.5px">ACTIVE ARR</span><span style="font-size:11px;font-weight:700;color:var(--teal2)">${fmt(activeARR)}</span></div>`:''}
+  <div style="display:flex;align-items:center;gap:7px;margin-left:auto;flex-wrap:wrap">
+    <input id="cs-search" oninput="csFilterRows(this.value)" placeholder="Search accounts…" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:6px 10px;font-size:9px;color:var(--text);width:150px;outline:none"/>
+    <button class="btn bg2" style="padding:6px 10px;font-size:9px" onclick="showImportAccounts()">↑ Import CSV</button>
+    <button class="btn bp2" style="padding:6px 10px;font-size:9px" onclick="showAddAccount()">+ Account</button>
+  </div>
+</div>
+
+<div class="g4">
+  <div class="mc ct"><div class="ml">Active ARR</div><div class="mv">${fmt(activeARR)}</div><div class="md">${expansion>0?('+'+fmt(expansion)+' expansion'):(active.length+' customers')}</div></div>
+  <div class="mc cb"><div class="ml">Net Revenue Retention</div><div class="mv">${nrr?nrr+'%':'—'}</div><div class="md">GRR ${grr?grr+'%':'—'} · est.</div></div>
+  <div class="mc ca"><div class="ml">Avg Health</div><div class="mv" style="color:${csHealthCol(avgHealth)}">${avgHealth||'—'}</div><div class="md">${bands.Healthy} healthy · ${bands['At-Risk']} at-risk</div></div>
+  <div class="mc cr"><div class="ml">Renewals ≤ 90d</div><div class="mv">${renew90.length}</div><div class="md">${fmt(renew90ARR)} at stake</div></div>
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Success Analytics</div><span class="badge bdt" style="margin-left:auto">${logoChurn}% logo churn</span></div>
+  ${A.length?`
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 12px 4px">
+    ${tile('At-Risk ARR', fmt(riskARR), risk.length+' accounts', riskARR>0?'#f5a623':null)}
+    ${tile('Expansion', fmt(expansion), 'upsell pipeline', '#1d9e75')}
+    ${tile('Churned ARR', fmt(churnedARR), churned.length+' logos lost', churnedARR>0?'#e84040':null)}
+    ${tile('Onboarding', onboarding.length, 'ramping now')}
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1.35fr;gap:12px;padding:6px 12px 14px">
+    <div><div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Health distribution</div><div style="height:150px"><canvas id="cs-health-ch"></canvas></div></div>
+    <div><div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">ARR by lifecycle stage</div><div style="height:150px"><canvas id="cs-arr-ch"></canvas></div></div>
+  </div>`:irEmpty('Add customer accounts to unlock health scoring, retention and churn analytics.')}
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Customer Accounts</div><span class="badge bdb" style="margin-left:auto">${A.length} account${A.length===1?'':'s'}</span></div>
+  ${A.length?`
+  <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:9.5px">
+    <thead><tr style="text-align:left;color:var(--text3);font-size:8px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="padding:7px 10px">Account</th><th style="padding:7px 6px">Tier</th><th style="padding:7px 6px">Stage</th><th style="padding:7px 6px">ARR</th><th style="padding:7px 6px">Health</th><th style="padding:7px 6px">Onboarding</th><th style="padding:7px 6px">Renewal</th><th style="padding:7px 6px">CSM</th><th style="padding:7px 6px"></th>
+    </tr></thead><tbody id="cs-rows">
+    ${A.map(a=>{const h=csHealth(a);const d=csDays(a);return `<tr data-search="${(a.name+' '+(a.csm||'')+' '+(a.tier||'')+' '+(a.type||'')+' '+a.stage+' '+(a.notes||'')).toLowerCase().replace(/"/g,'')}" style="border-top:1px solid rgba(255,255,255,.05)">
+      <td style="padding:8px 10px"><div style="font-weight:600;color:var(--text)"><span onclick="csEditAccount('${a.id}')" style="cursor:pointer" title="Edit account">${a.name}</span></div><div style="font-size:8px;color:var(--text3)">${a.type||''}${a.seats?' · '+a.seats+' seats':''}${a.notes?' · '+a.notes:''}</div></td>
+      <td style="padding:8px 6px;color:var(--text2)">${a.tier||'—'}</td>
+      <td style="padding:8px 6px"><select onchange="csSetStage('${a.id}',this.value)" style="background:var(--bg2);border:1px solid ${csStageCol(a.stage)};color:${csStageCol(a.stage)};border-radius:5px;padding:3px 5px;font-size:8.5px;font-weight:600">${CS_STAGES.map(s=>`<option ${s===a.stage?'selected':''}>${s}</option>`).join('')}</select></td>
+      <td style="padding:8px 6px;color:var(--text2)">${a.arr?fmt(a.arr):'—'}</td>
+      <td style="padding:8px 6px"><div style="display:flex;align-items:center;gap:5px"><div style="width:30px;height:5px;border-radius:3px;background:rgba(255,255,255,.08)"><div style="width:${h}%;height:100%;border-radius:3px;background:${csHealthCol(h)}"></div></div><span style="font-size:8.5px;font-weight:700;color:${csHealthCol(h)}">${h}</span></div></td>
+      <td style="padding:8px 6px">${a.stage==='Onboarding'?`<div style="display:flex;align-items:center;gap:5px"><div style="width:30px;height:5px;border-radius:3px;background:rgba(255,255,255,.08)"><div style="width:${a.onboarding||0}%;height:100%;border-radius:3px;background:#2e7dd4"></div></div><span style="font-size:8px;color:var(--text3)">${a.onboarding||0}%</span></div>`:'<span style="font-size:8px;color:var(--text4)">—</span>'}</td>
+      <td style="padding:8px 6px">${d==null?'<span style="color:var(--text3)">—</span>':`<span style="color:${csRenewalCol(d)};font-weight:600;font-size:9px">${d<0?Math.abs(d)+'d ago':d+'d'}</span>`}</td>
+      <td style="padding:8px 6px;color:var(--text2)">${(a.csm||'—').split(' ')[0]}</td>
+      <td style="padding:8px 6px;white-space:nowrap;text-align:right"><span onclick="csEditAccount('${a.id}')" style="cursor:pointer;margin-right:7px" title="Edit">✎</span><span onclick="csLogActivity('${a.id}')" style="cursor:pointer;margin-right:7px" title="Log QBR / activity">◷</span><span onclick="csDelete('${a.id}')" style="cursor:pointer;color:var(--text3)" title="Remove">×</span></td>
+    </tr>`;}).join('')}
+    </tbody></table></div>`:irEmpty('No customer accounts yet. Add your first account or import a list.', `<button class="btn bp2" style="padding:4px 10px;font-size:9px" onclick="showAddAccount()">+ Add Account</button>`)}
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+  <div class="panel">
+    <div class="ph"><div class="pt2">Churn Risk &amp; Playbook</div><span class="badge" style="margin-left:auto;background:rgba(245,166,35,.15);color:#f5c375">${risk.length} at-risk</span></div>
+    <div style="padding:10px 12px">
+    ${risk.length? risk.sort((a,b)=>csHealth(a)-csHealth(b)).slice(0,8).map(a=>{const h=csHealth(a);return `<div style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div style="display:flex;align-items:center;gap:8px"><span style="width:7px;height:7px;border-radius:50%;background:${csHealthCol(h)};flex-shrink:0"></span><span style="font-size:9.5px;font-weight:600;color:var(--text);flex:1">${a.name}</span><span style="font-size:8px;color:var(--text3)">${a.arr?fmt(a.arr):''}</span><span style="font-size:8.5px;font-weight:700;color:${csHealthCol(h)}">${h}</span></div>
+      <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;padding-left:15px">${csPlaybook(a).slice(0,3).map(p=>`<span style="font-size:8px;color:var(--amber2);background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.18);border-radius:5px;padding:2px 6px">→ ${p}</span>`).join('')}</div>
+    </div>`;}).join('') : irEmpty('No at-risk accounts. Health looks good across the book.')}
+    </div>
+  </div>
+  <div class="panel">
+    <div class="ph"><div class="pt2">Upcoming Renewals</div><span class="badge bdt" style="margin-left:auto">${fmt(renew90ARR)}</span></div>
+    <div style="padding:10px 12px">
+    ${renew90.length? renew90.slice(0,8).map(a=>{const d=csDays(a);return `<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div style="width:44px;text-align:center;flex-shrink:0"><div style="font-size:12px;font-weight:700;color:${csRenewalCol(d)}">${d}d</div></div>
+      <div style="flex:1;min-width:0"><div style="font-size:9.5px;font-weight:600;color:var(--text)">${a.name}</div><div style="font-size:8px;color:var(--text3)">${a.renewalDate} · health ${csHealth(a)}</div></div>
+      <span style="font-size:9px;color:var(--text2);font-weight:600">${a.arr?fmt(a.arr):''}</span>
+      <span onclick="csLogActivity('${a.id}')" style="cursor:pointer;color:var(--text3);margin-left:4px" title="Log renewal call">◷</span>
+    </div>`;}).join('') : irEmpty('No renewals in the next 90 days.')}
+    </div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+  <div class="panel">
+    <div class="ph"><div class="pt2">Onboarding</div><span class="badge bdb" style="margin-left:auto">${onboarding.length} ramping</span></div>
+    <div style="padding:10px 12px">
+    ${onboarding.length? onboarding.sort((a,b)=>(a.onboarding||0)-(b.onboarding||0)).map(a=>`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:3px"><span style="color:var(--text)">${a.name}</span><span style="color:var(--text3)">${a.onboarding||0}%</span></div><div style="height:6px;border-radius:4px;background:rgba(255,255,255,.06)"><div style="width:${a.onboarding||0}%;height:100%;border-radius:4px;background:${(a.onboarding||0)>=70?'#1d9e75':(a.onboarding||0)>=40?'#2e7dd4':'#f5a623'}"></div></div></div>`).join('') : irEmpty('No accounts in onboarding.')}
+    </div>
+  </div>
+  <div class="panel">
+    <div class="ph"><div class="pt2">Recent Activity</div><span class="badge bdb" style="margin-left:auto">${allActs.length} logged</span></div>
+    <div style="padding:6px 12px 12px">
+    ${allActs.length? allActs.slice(0,10).map(x=>`<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <span style="font-size:7px;font-weight:700;padding:2px 6px;border-radius:5px;flex-shrink:0;background:rgba(46,125,212,.15);color:#78b4f0">${x.type}</span>
+      <div style="flex:1;min-width:0"><div style="font-size:9.5px;color:var(--text)">${x.acc} <span style="color:var(--text3)">· ${x.outcome||''}</span></div>${x.note?`<div style="font-size:8px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.note}</div>`:''}</div>
+      <span style="font-size:8px;color:var(--text3);flex-shrink:0">${x.date||''}</span>
+      <span onclick="csRemoveActivity('${x.accId}','${x.id}')" style="cursor:pointer;color:var(--text3);flex-shrink:0" title="Remove">×</span>
+    </div>`).join('') : irEmpty('No activity logged yet. Use ◷ on any account to log a QBR, check-in or support touch.')}
+    </div>
+  </div>
+</div>`;
+
+  if(A.length) ar(()=>{
+    makeChart('cs-health-ch','doughnut',['Healthy','Neutral','At-Risk'],[{data:[bands.Healthy,bands.Neutral,bands['At-Risk']],backgroundColor:['#1d9e75','#f5a623','#e84040'],borderColor:'rgba(8,19,31,.6)',borderWidth:2}],{cutout:'60%',plugins:{legend:{display:true,position:'right',labels:{color:'#8fa8c0',font:{family:'JetBrains Mono',size:8},boxWidth:8,padding:6}}}});
+    makeChart('cs-arr-ch','bar',CS_STAGES,[{data:byStageArr,backgroundColor:CS_STAGES.map(s=>csStageCol(s)),borderRadius:4,maxBarThickness:34}],{plugins:{tooltip:{callbacks:{label:(x)=>' '+fmt(x.raw)}}},scales:{y:{ticks:{callback:(val)=>'$'+(val>=1e6?(val/1e6)+'M':val>=1e3?(val/1e3)+'K':val)}}}});
+  });
+};
+function csFilterRows(q){ q=String(q||'').toLowerCase().trim(); document.querySelectorAll('#cs-rows tr').forEach(tr=>{ const hay=tr.getAttribute('data-search')||''; tr.style.display=(!q||hay.indexOf(q)>-1)?'':'none'; }); }
+
 
 // ══════════════════════════════════════════════
 // INVESTOR RELATIONS  (fully dynamic — data entered by the team, persisted)
@@ -4961,7 +5505,7 @@ const ROLES = {
   finance: {
     label:'Finance', col:'#8fa8c0', badge:'bdb',
     desc:'Financial dashboards, analytics, forecasting, investor metrics, and pipeline overview.',
-    can:['dashboard','analytics','forecasting','pipeline','ir','tasks','notifications','playbook','team-access'],
+    can:['dashboard','analytics','forecasting','pipeline','ir','cs','pipetracker','tasks','notifications','playbook','team-access'],
   },
   ai_engineer: {
     label:'AI Engineer', col:'#2e7dd4', badge:'bdb',

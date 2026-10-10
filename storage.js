@@ -31,6 +31,8 @@ const COLLECTIONS = [
   'activities',
   'sequences',
   'investors',
+  'accounts',
+  'prospects',
 ];
 
 function loadSeed() {
