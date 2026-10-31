@@ -40,6 +40,11 @@ services:
       # Investor Relations — live data room link (surfaced to the app)
       - key: DATA_ROOM_URL
         value: https://cardioailivepro.com/data_room.html
+      # Crunchbase integration (Investor Relations). API key is secret.
+      - key: CRUNCHBASE_API_KEY
+        sync: false
+      - key: CRUNCHBASE_ORG
+        value: cardio-ai-8559
       # ─── Ecosystem integration ───
       # Same value on the Operations hub + Sales platform. Enables the CRM's
       # /api/integrations/pipeline endpoint and the inbound pull below.

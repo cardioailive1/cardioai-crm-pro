@@ -272,7 +272,19 @@ const API = {
   ai(message, system) { return this.req('POST', '/api/ai/chat', { message, system }); },
   external() { return this.req('GET', '/api/integrations/external'); },
   integrationStatus() { return this.req('GET', '/api/integrations/status'); },
+  crunchbase(opts) { const q=(opts&&opts.refresh)?'?refresh=1':''; return this.req('GET', '/api/integrations/crunchbase'+q); },
 };
+
+// Crunchbase org data (Investor Relations). Fetched lazily; display-only.
+let CB = { loaded:false, loading:false, configured:false, org:'', url:'', data:null, error:null };
+async function loadCrunchbase(force){
+  if (CB.loading) return;
+  CB.loading = true; if (CV==='ir') { const b=document.getElementById('cb-refresh'); if(b) b.textContent='…'; }
+  try {
+    CB = Object.assign({loaded:true,loading:false}, await API.crunchbase({refresh:!!force}));
+  } catch(e) { CB = Object.assign({}, CB, {loaded:true,loading:false,error:'unreachable'}); }
+  if (CV==='ir') renderView();
+}
 
 // Read-only pipeline pulled from connected upstreams (Sales Engine / Operations).
 // Kept OUT of DB.deals so it's never persisted by saveDB — display only.
@@ -289,7 +301,7 @@ async function loadExternalPipeline() {
 // saveDB(); we batch rapid mutations (e.g. the live score timer) into one PUT.
 let OFFLINE = false; // true when no backend is reachable (offline demo mode)
 // Public runtime config from the server (env-driven). dataRoomUrl comes from DATA_ROOM_URL.
-let APP_CONFIG = { dataRoomUrl: '' };
+let APP_CONFIG = { dataRoomUrl: '', crunchbase: { org:'cardio-ai-8559', url:'https://www.crunchbase.com/organization/cardio-ai-8559', configured:false } };
 let _saveTimer = null, _savePending = false;
 function _flushSave() {
   _savePending = false;
@@ -419,7 +431,7 @@ async function hydrateDB() {
     DB.accounts = data.accounts || [];
     DB.prospects = data.prospects || [];
     DB.settings = data.settings || {};
-    APP_CONFIG = Object.assign({ dataRoomUrl:'' }, data.config || {});
+    APP_CONFIG = Object.assign({ dataRoomUrl:'', crunchbase:{org:'cardio-ai-8559',url:'https://www.crunchbase.com/organization/cardio-ai-8559',configured:false} }, data.config || {});
   } catch (e) {
     console.warn('hydrate failed, using local seed:', e.message);
     DB.contacts = JSON.parse(JSON.stringify(SEED.contacts));
@@ -1578,6 +1590,66 @@ const IR_DEFAULTS = { round:'Seed', target:0, valuation:'', arr:0, burn:0, runwa
 let IR_DR_EMBED = false;
 // Effective data room URL: per-workspace override (settings) wins, else the server env value.
 function irDataRoomUrl(){ const c=irCfg(); return (c.dataroomUrl && c.dataroomUrl.trim()) ? c.dataroomUrl.trim() : (APP_CONFIG.dataRoomUrl||''); }
+
+// Crunchbase → Investor pipeline. Creates investor records from the live
+// Crunchbase investor list (deduped by firm name). Data is pulled live, not invented.
+function cbImportInvestors(){
+  if(!CB.data || !Array.isArray(CB.data.investors) || !CB.data.investors.length){ toast('No Crunchbase investors to import','info'); return; }
+  const existing = new Set((DB.investors||[]).map(i=>String(i.firm||'').trim().toLowerCase()));
+  let added=0;
+  CB.data.investors.forEach(iv=>{
+    const firm=String(iv.name||'').trim(); if(!firm || existing.has(firm.toLowerCase())) return;
+    existing.add(firm.toLowerCase());
+    dbAddInvestor({
+      id:newId('inv'), firm, type:(/vc|venture/i.test(iv.type||'')?'VC':/angel/i.test(iv.type||'')?'Angel':'VC'),
+      partner:'—', stage: iv.lead?'Committed':'Prospect', check:0, committed:0, fit:0,
+      owner:'—', last:'From Crunchbase', status: iv.lead?'Lead investor (Crunchbase)':'Investor on record (Crunchbase)',
+      strength:'New', introBy:'', segment:'', email:'', phone:'', comms:[], autoOutreach:false, source:'crunchbase'
+    });
+    added++;
+  });
+  renderView();
+  toast(added? (added+' investor'+(added===1?'':'s')+' imported from Crunchbase') : 'All Crunchbase investors already in pipeline', added?'success':'info');
+}
+function cbUrl(){ return (CB.url) || (APP_CONFIG.crunchbase&&APP_CONFIG.crunchbase.url) || 'https://www.crunchbase.com/organization/cardio-ai-8559'; }
+function cbTile(l,val,sub){ return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px"><div style="font-size:8px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase">${l}</div><div style="font-size:14px;font-weight:700;color:var(--text);margin-top:2px">${val}</div><div style="font-size:8px;color:var(--text3);margin-top:1px">${sub||''}</div></div>`; }
+function cbPanelInner(){
+  const url=cbUrl();
+  if(!CB.loaded) return `<div style="padding:18px 12px;font-size:9.5px;color:var(--text3)">Loading Crunchbase…</div>`;
+  if(!CB.configured) return `<div style="padding:12px">
+    <div style="display:flex;align-items:center;gap:10px;background:rgba(46,125,212,.06);border:1px solid rgba(46,125,212,.2);border-radius:8px;padding:11px 13px">
+      <div style="font-size:20px">🔗</div>
+      <div style="flex:1;min-width:0"><div style="font-size:10px;font-weight:700;color:var(--text)">Crunchbase profile linked</div>
+      <div style="font-size:8.5px;color:var(--text3)">Live enrichment is off. Set <code>CRUNCHBASE_API_KEY</code> on the server to pull funding, rounds &amp; investors automatically.</div></div>
+      <button class="btn bp2" style="padding:5px 10px;font-size:9px;flex-shrink:0" onclick="window.open('${url}','_blank','noopener')">View ↗</button>
+    </div></div>`;
+  if(CB.error){ const m={invalid_api_key:'API key rejected (401) — check CRUNCHBASE_API_KEY.',forbidden_or_plan:'Access denied (403) — your Crunchbase plan may not include API access.',org_not_found:'Organization not found (404) — check CRUNCHBASE_ORG.',rate_limited:'Rate limited (429) — try again shortly.',unreachable:'Could not reach the server.'}[CB.error]||('Upstream error'+(CB.status?' ('+CB.status+')':'')+'.');
+    return `<div style="padding:12px"><div style="font-size:9px;color:var(--amber2);background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);border-radius:8px;padding:10px 12px">${m} <a href="${url}" target="_blank" style="color:var(--blue2)">Open profile ↗</a></div></div>`; }
+  const d=CB.data||{};
+  const newInv=(d.investors||[]).filter(iv=>!(DB.investors||[]).some(x=>String(x.firm||'').trim().toLowerCase()===String(iv.name||'').trim().toLowerCase())).length;
+  return `<div style="padding:12px 12px 4px">
+    ${d.description?`<div style="font-size:9.5px;color:var(--text2);line-height:1.5;margin-bottom:10px">${d.description}</div>`:''}
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      ${cbTile('Total Funding', d.fundingTotal!=null?fmt(d.fundingTotal):'—', d.lastFundingType?('last: '+d.lastFundingType):'')}
+      ${cbTile('Funding Rounds', d.numRounds!=null?d.numRounds:'—', '')}
+      ${cbTile('Investors', d.numInvestors!=null?d.numInvestors:'—', (d.investors&&d.investors.length)?('⭳ '+d.investors.length+' named'):'')}
+      ${cbTile('Founded', d.foundedOn||'—', d.location||'')}
+    </div>
+    ${(d.categories&&d.categories.length)?`<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:4px">${d.categories.slice(0,8).map(c=>`<span style="font-size:8px;color:var(--text3);background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:2px 7px">${c}</span>`).join('')}</div>`:''}
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px 12px 12px">
+    <div>
+      <div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Funding rounds</div>
+      ${(d.rounds&&d.rounds.length)? d.rounds.slice(0,6).map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:9px"><span style="flex:1;color:var(--text2)">${r.name}${r.announced?` <span style="color:var(--text3)">· ${r.announced}</span>`:''}</span>${r.amount!=null?`<span style="color:var(--teal2);font-weight:600">${fmt(r.amount)}</span>`:''}</div>`).join('') : `<div style="font-size:8.5px;color:var(--text3)">No rounds on record.</div>`}
+    </div>
+    <div>
+      <div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Investors on record</div>
+      ${(d.investors&&d.investors.length)? d.investors.slice(0,8).map(iv=>`<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:9px"><span style="flex:1;color:var(--text)">${iv.name}</span>${iv.lead?`<span class="badge bdt" style="font-size:6.5px">LEAD</span>`:''}</div>`).join('') : `<div style="font-size:8.5px;color:var(--text3)">No named investors returned.</div>`}
+      ${(d.investors&&d.investors.length)?`<button class="btn bp2" style="width:100%;padding:6px;font-size:9px;margin-top:8px" onclick="cbImportInvestors()">⭳ Import ${newInv} new investor${newInv===1?'':'s'} → pipeline</button>`:''}
+    </div>
+  </div>
+  ${CB.fetchedAt?`<div style="font-size:7.5px;color:var(--text4);padding:0 12px 10px">Live from Crunchbase · fetched ${new Date(CB.fetchedAt).toLocaleString()}${CB.cached?' (cached)':''}</div>`:''}`;
+}
 const IR_STRENGTHS = ['Strong','Warm','New','Cold'];
 function irStrengthCol(s){return ({Strong:'#1d9e75',Warm:'#f5a623',New:'#2e7dd4',Cold:'#8fa8c0'})[s]||'#8fa8c0';}
 const IR_DOC_CATS = ['Pitch Deck','Financial Model','Cap Table','Legal','Diligence','Product','Team','Metrics','Other'];
@@ -2248,6 +2320,11 @@ VIEWS.ir = function(v) {
 </div>
 
 <div class="panel" style="margin-top:12px">
+  <div class="ph"><div class="pt2">Crunchbase</div>${CB.configured?`<span class="badge bdt" style="margin-left:6px">● Live</span>`:`<span class="badge bdb" style="margin-left:6px">linked</span>`}<span style="font-size:8px;color:var(--text3);margin-left:6px">${(APP_CONFIG.crunchbase&&APP_CONFIG.crunchbase.org)||'cardio-ai-8559'}</span>${CB.configured?`<button class="btn bg2" id="cb-refresh" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="loadCrunchbase(true)" title="Refresh from Crunchbase">⟳</button>`:''}<button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:${CB.configured?'6px':'auto'}" onclick="window.open('${cbUrl()}','_blank','noopener')">View on Crunchbase ↗</button></div>
+  ${cbPanelInner()}
+</div>
+
+<div class="panel" style="margin-top:12px">
   <div class="ph"><div class="pt2">Data Room</div>${drUrl?`<span class="badge bdt" style="margin-left:6px">● Live</span>`:''}<span class="badge bdb" style="margin-left:6px">${dataroom.length} doc${dataroom.length===1?'':'s'}</span><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:auto" onclick="irSetDataroomUrl()">⚙ URL</button><button class="btn bg2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="showAddDoc()">+ Document</button>${drUrl?`<button class="btn bp2" style="padding:2px 7px;font-size:8.5px;margin-left:6px" onclick="window.open('${drUrl}','_blank','noopener')">🔒 Open Live ↗</button>`:''}</div>
   ${drUrl?`
   <div style="padding:12px 12px 0">
@@ -2303,6 +2380,8 @@ VIEWS.ir = function(v) {
     ${(c.updates&&c.updates.length)? c.updates.map((u,idx)=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)"><div style="font-size:8px;color:var(--text3);width:56px;flex-shrink:0">${u.date||'—'}</div><div style="flex:1;font-size:9.5px;color:var(--text)">${u.title}</div>${u.opens?`<span class="badge bdt" style="font-size:7.5px">${u.opens}</span>`:''}<span onclick="irRemoveUpdate(${idx})" style="cursor:pointer;color:var(--text3);margin-left:8px" title="Remove">×</span></div>`).join('') : irEmpty('No updates logged yet. Log one, or use Compose to draft with AI.') }
   </div>
 </div>`;
+  // Lazy-load Crunchbase org data the first time the IR tab renders.
+  if (!CB.loaded && !CB.loading) ar(()=>loadCrunchbase(false));
   // Investor analytics charts
   if (inv.length) ar(()=>{
     const stageCols = IR_STAGES.map(s=>irStageCol(s));
