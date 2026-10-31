@@ -65,6 +65,12 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 // Public runtime config surfaced to the browser (non-sensitive).
 const DATA_ROOM_URL = process.env.DATA_ROOM_URL || '';
 
+// Crunchbase integration (Investor Relations). The API key is secret and stays
+// server-side; only the org permalink + a "configured" flag reach the browser.
+const CRUNCHBASE_API_KEY = process.env.CRUNCHBASE_API_KEY || '';
+const CRUNCHBASE_ORG = process.env.CRUNCHBASE_ORG || 'cardio-ai-8559';
+const CRUNCHBASE_URL = 'https://www.crunchbase.com/organization/' + CRUNCHBASE_ORG;
+
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
@@ -318,7 +324,14 @@ api.get('/bootstrap', async (req, res, next) => {
       accounts: lists.accounts || [],
       prospects: lists.prospects || [],
       settings: (await store.getSingleton('app_settings')) || {},
-      config: { dataRoomUrl: DATA_ROOM_URL },
+      config: {
+        dataRoomUrl: DATA_ROOM_URL,
+        crunchbase: {
+          org: CRUNCHBASE_ORG,
+          url: CRUNCHBASE_URL,
+          configured: !!CRUNCHBASE_API_KEY,
+        },
+      },
     });
   } catch (e) {
     next(e);
@@ -483,6 +496,125 @@ app.post('/api/ai/chat', ensureApiAuth, async (req, res) => {
   } catch (e) {
     console.error('[ai] proxy failure:', e.message);
     res.status(502).json({ error: 'ai_upstream_error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Crunchbase integration — pulls the company's public org + funding + investor
+// data through Crunchbase's official API v4. The API key stays server-side.
+// Results are cached (default 6h) since Crunchbase rate limits are strict and
+// org data changes rarely.
+// ---------------------------------------------------------------------------
+const CB_BASE = 'https://api.crunchbase.com/v4/data/entities/organizations/';
+// Conservative, well-established org field_ids (an invalid field 400s the whole
+// request, so we keep to known-good v4 properties).
+const CB_FIELDS = (process.env.CRUNCHBASE_FIELDS ||
+  'identifier,short_description,description,founded_on,funding_total,last_funding_type,' +
+  'num_funding_rounds,num_investors,location_identifiers,categories,website,linkedin,image_url,rank_org')
+  .split(',').map((s) => s.trim()).filter(Boolean).join(',');
+const CB_CARDS = 'raised_funding_rounds,investors';
+const CB_CACHE_MS = Number(process.env.CRUNCHBASE_CACHE_MS || 6 * 60 * 60 * 1000);
+let _cbCache = { ts: 0, org: '', payload: null };
+
+function cbText(v) {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (typeof v === 'object') return v.value != null ? String(v.value) : '';
+  return '';
+}
+function cbMoney(v) {
+  if (!v) return null;
+  if (typeof v === 'number') return v;
+  return v.value_usd != null ? v.value_usd : (v.value != null ? v.value : null);
+}
+
+async function cbFetch(org, key, withCards) {
+  const url = CB_BASE + encodeURIComponent(org) +
+    '?field_ids=' + encodeURIComponent(CB_FIELDS) +
+    (withCards ? '&card_ids=' + encodeURIComponent(CB_CARDS) : '');
+  const r = await fetch(url, {
+    headers: { 'X-cb-user-key': key, Accept: 'application/json' },
+  });
+  return r;
+}
+
+function cbNormalize(org, json) {
+  const p = (json && json.properties) || {};
+  const cards = (json && json.cards) || {};
+  const loc = Array.isArray(p.location_identifiers)
+    ? p.location_identifiers.map((l) => cbText(l)).filter(Boolean)
+    : [];
+  const cats = Array.isArray(p.categories)
+    ? p.categories.map((c) => cbText(c)).filter(Boolean)
+    : [];
+  const rounds = Array.isArray(cards.raised_funding_rounds)
+    ? cards.raised_funding_rounds.map((rd) => ({
+        name: cbText(rd.identifier) || cbText(rd.investment_type) || 'Funding round',
+        type: cbText(rd.investment_type),
+        announced: cbText(rd.announced_on),
+        amount: cbMoney(rd.money_raised),
+      }))
+    : [];
+  // The investors card returns investment objects; the investor name lives under
+  // investor_identifier (fallbacks kept for schema variance).
+  const investors = Array.isArray(cards.investors)
+    ? cards.investors.map((iv) => ({
+        name: cbText(iv.investor_identifier) || cbText(iv.identifier) || cbText(iv.name),
+        type: cbText(iv.investor_type) || cbText(iv.entity_def_id),
+        lead: !!iv.is_lead_investor,
+      })).filter((x) => x.name)
+    : [];
+  return {
+    name: cbText(p.identifier) || org,
+    description: cbText(p.short_description) || cbText(p.description),
+    foundedOn: cbText(p.founded_on),
+    fundingTotal: cbMoney(p.funding_total),
+    lastFundingType: cbText(p.last_funding_type),
+    numRounds: p.num_funding_rounds != null ? p.num_funding_rounds : rounds.length,
+    numInvestors: p.num_investors != null ? p.num_investors : investors.length,
+    location: loc.join(', '),
+    categories: cats,
+    website: cbText(p.website),
+    linkedin: cbText(p.linkedin),
+    image: cbText(p.image_url),
+    rank: p.rank_org != null ? p.rank_org : null,
+    rounds,
+    investors,
+  };
+}
+
+app.get('/api/integrations/crunchbase', ensureApiAuth, async (req, res) => {
+  const org = (req.query.org && String(req.query.org).trim()) || CRUNCHBASE_ORG;
+  const base = { org, url: 'https://www.crunchbase.com/organization/' + org };
+  if (!CRUNCHBASE_API_KEY) {
+    return res.json({ ...base, configured: false });
+  }
+  // Serve cache unless a refresh is forced or the org changed.
+  const fresh = Date.now() - _cbCache.ts < CB_CACHE_MS;
+  if (fresh && _cbCache.org === org && _cbCache.payload && req.query.refresh !== '1') {
+    return res.json({ ...base, configured: true, cached: true, ...(_cbCache.payload) });
+  }
+  try {
+    let r = await cbFetch(org, CRUNCHBASE_API_KEY, true);
+    // If cards or a field tripped a 400, retry without cards for a usable result.
+    if (r.status === 400) {
+      const retry = await cbFetch(org, CRUNCHBASE_API_KEY, false);
+      if (retry.ok) r = retry;
+    }
+    if (!r.ok) {
+      const detail = await r.text();
+      console.error('[crunchbase] error', r.status, detail.slice(0, 300));
+      const map = { 401: 'invalid_api_key', 403: 'forbidden_or_plan', 404: 'org_not_found', 429: 'rate_limited' };
+      return res.json({ ...base, configured: true, error: map[r.status] || 'upstream_error', status: r.status });
+    }
+    const json = await r.json();
+    const data = cbNormalize(org, json);
+    const payload = { data, fetchedAt: new Date().toISOString() };
+    _cbCache = { ts: Date.now(), org, payload };
+    res.json({ ...base, configured: true, cached: false, ...payload });
+  } catch (e) {
+    console.error('[crunchbase] fetch failure:', e.message);
+    res.json({ ...base, configured: true, error: 'upstream_error' });
   }
 });
 

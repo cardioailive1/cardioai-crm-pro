@@ -111,6 +111,8 @@ Only accounts on the allowed domain can enter.
 | `ANTHROPIC_API_KEY` | no | Enables the AI Assistant proxy |
 | `ANTHROPIC_MODEL` | no | Model id (default `claude-sonnet-4-6`) |
 | `DATA_ROOM_URL` | no | Live investor data room URL shown in the IR tab's Data Room panel |
+| `CRUNCHBASE_API_KEY` | no | Crunchbase API v4 key — enables live org/funding/investor data in the IR tab |
+| `CRUNCHBASE_ORG` | no | Crunchbase org permalink (default `cardio-ai-8559`) |
 | `BASE_URL` | no | Overrides the auto-detected public URL |
 | `GOOGLE_CALLBACK_URL` | no | Overrides `<BASE_URL>/auth/google/callback` |
 | `PORT` | no | Defaults to 3000 (Render sets this automatically) |
@@ -295,3 +297,20 @@ cardio-ai-crm/
     └── index.html       # the CRM single-page app (API-backed)
     └── login.html       # Google sign-in page (served at /login)
 ```
+
+---
+
+## Customer Success module
+
+A post-sale **Customer Success** tab (sidebar → Customer Success) tracks customer accounts (hospitals, health systems, clinics) with a computed **health score** (usage 35% · adoption 30% · sentiment 25% · support 10%), **lifecycle stages** (Onboarding → Adopting → Established → At-Risk → Churned), **renewal tracking** with day countdowns, **churn-risk playbooks** (rule-based next actions), **onboarding progress**, **QBR/activity logging**, and analytics (NRR/GRR, logo churn, health distribution, ARR by stage). Data lives in the persisted `accounts` collection; CSV import and full add/edit are built in. No hardcoded data — starts empty.
+
+---
+
+---
+
+## Crunchbase integration (Investor Relations)
+
+The IR tab has a **Crunchbase** panel for the company org (`cardio-ai-8559`). It always links to the public profile. When `CRUNCHBASE_API_KEY` is set (Crunchbase API v4, requires a plan with API access), the panel pulls **total funding, funding rounds, and investors** live via the official API — the key stays server-side and results are cached ~6h. A one-click **Import investors → pipeline** button turns the named investors on record into investor-pipeline entries (deduped by firm; data is pulled live, never fabricated). Change the org with `CRUNCHBASE_ORG`.
+
+---
+
